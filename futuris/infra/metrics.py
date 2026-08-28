@@ -33,10 +33,22 @@ WEBHOOK_DELIVERY_TOTAL = Counter(
     ["status_code"],
 )
 
-LLM_CALLS_TOTAL = Counter(
-    "llm_calls_total",
-    "Total LLM agent calls and rule-based fallback counter",
-    ["provider", "status"],
+SCENARIO_RUNS_TOTAL = Counter(
+    "scenario_runs_total",
+    "Total number of counterfactual scenarios evaluated",
+    ["scenario_type"],
+)
+
+CONNECTOR_INGESTION_TOTAL = Counter(
+    "connector_ingestion_total",
+    "Total observations ingested by connector",
+    ["connector", "status"],
+)
+
+MODEL_ACCURACY_GAUGE = Gauge(
+    "model_accuracy_by_type",
+    "Rolling empirical model accuracy by target type",
+    ["target_type", "model_family"],
 )
 
 
