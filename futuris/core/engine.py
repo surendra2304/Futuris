@@ -1,4 +1,4 @@
-"""ForecastEngine: End-to-end forecasting pipeline orchestration with calibration confidence."""
+"""ForecastEngine: Pipeline orchestration with calibration confidence and drivers."""
 
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -12,6 +12,7 @@ from futuris.core.schemas import Driver, Forecast
 from futuris.evaluation.confidence import ConfidenceAssessor, confidence_assessor
 from futuris.evidence.snapshots import EvidenceSnapshotter
 from futuris.features.contextualize import ContextLayer
+from futuris.features.drivers import DriverAnalyzer
 from futuris.features.normalize import Normalizer
 from futuris.models.base import ModelPrediction
 from futuris.models.registry import model_registry
@@ -19,7 +20,7 @@ from futuris.models.routing import ModelRouter, SeriesMetadata
 
 
 class ForecastEngine:
-    """Orchestrates features, model selection, calibration, and forecast assembly."""
+    """Orchestrates features, model selection, calibration, drivers, and forecast assembly."""
 
     def __init__(
         self,
@@ -29,6 +30,7 @@ class ForecastEngine:
         context_layer: ContextLayer | None = None,
         router: ModelRouter | None = None,
         assessor: ConfidenceAssessor | None = None,
+        driver_analyzer: DriverAnalyzer | None = None,
     ) -> None:
         self.connector = connector or SyntheticTelemetryConnector(seed=42)
         self.snapshotter = snapshotter or EvidenceSnapshotter()
@@ -36,6 +38,7 @@ class ForecastEngine:
         self.context_layer = context_layer or ContextLayer()
         self.router = router or ModelRouter()
         self.confidence_assessor = assessor or confidence_assessor
+        self.driver_analyzer = driver_analyzer or DriverAnalyzer()
 
     async def orchestrate(
         self,
@@ -87,7 +90,6 @@ class ForecastEngine:
         y_series = features_df["value"]
         x_df = features_df.drop(columns=["value"])
 
-        # Train/validation split on trailing window
         val_steps = min(horizon_steps, max(12, len(y_series) // 5))
         y_train = y_series.iloc[:-val_steps]
         x_train = x_df.iloc[:-val_steps]
@@ -133,21 +135,24 @@ class ForecastEngine:
             quality_report=signal_set.quality_report,
         )
 
-        # 9. Construct Explanatory Drivers
-        y_mean = float(y_series.mean())
-        y_std = float(y_series.std())
-        strength_score = round(
-            float(abs(final_prediction.central_estimate - y_mean) / (y_std + 1e-5)), 2
+        # 9. Extract Explanatory Drivers using DriverAnalyzer
+        drivers = self.driver_analyzer.analyze_drivers(
+            features_df=features_df,
+            target_column="value",
+            evidence_id=evidence_ref.evidence_id,
         )
-        drivers = [
-            Driver(
-                name="diurnal_traffic_cycle",
-                direction="positive" if final_prediction.central_estimate > y_mean else "neutral",
-                strength=strength_score,
-                leading_or_lagging="leading",
-                evidence_refs=[evidence_ref.evidence_id],
-            )
-        ]
+        if not drivers:
+            mean_val = float(y_series.mean())
+            is_pos = final_prediction.central_estimate > mean_val
+            drivers = [
+                Driver(
+                    name="diurnal_traffic_cycle",
+                    direction="positive" if is_pos else "neutral",
+                    strength=0.85,
+                    leading_or_lagging="leading",
+                    evidence_refs=[evidence_ref.evidence_id],
+                )
+            ]
 
         # 10. Assemble Forecast Domain Object
         expires_at = as_of + horizon

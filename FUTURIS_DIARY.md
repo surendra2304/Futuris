@@ -4,8 +4,8 @@ Comprehensive chronological engineering log, architectural evolution, and daily 
 
 ---
 
-### 📈 [Day 1 — 2026-08-28: Phases 1 to 8 — Scaffold, Persistence, Ingestion, Forecasting, Calibration, Lifecycle & Scenarios](diary/2026-08-28.md)
-- **🎯 Focus**: Scenario graph modeling, elasticity sensitivity propagation, Monte Carlo distribution simulation, counterfactual overrides, sensitivity attribution ranking, and divergence comparison.
-- **💡 What I Accomplished**: Built uturis/scenarios/ (spec.py, graph.py, engine.py), ScenarioRepository in uturis/storage/repositories.py, and test suites in 	ests/test_scenarios.py. Implemented builder helpers (aseline, upside, downside, stress, counterfactual, user_defined), topological linear propagation, 1000-sample Gaussian Monte Carlo simulation, and cross-scenario divergence comparison with top driver attribution. Proved strict immutability of parent forecasts.
-- **🛡️ Fixes & Hardening**: Fixed missing ScenarioRepository aggregate in epositories.py, optimized topological sorting dictionary comprehensions, and verified diary line-count compliance.
-- **📊 Test Results**: **47 passed** (100% green pass rate across all suites with 0 linting warnings).
+### 📈 [Day 1 — 2026-08-28: Phases 1 to 9 — Scaffold, Persistence, Ingestion, Forecasting, Calibration, Lifecycle, Scenarios & Decision Support](diary/2026-08-28.md)
+- **🎯 Focus**: Explanatory driver analysis, lead/lag cross-correlation, driver degradation detection, decision support implications, urgency classification, and architectural safety gating.
+- **💡 What I Accomplished**: Built uturis/features/drivers.py (DriverAnalyzer), uturis/core/decision.py (DecisionSupport, ActionSuggestion, DecisionImplication), and test suites in 	ests/test_drivers_and_decisions.py. Wired DriverAnalyzer into ForecastEngine.orchestrate. Implemented leading indicator detection (cross-correlation peak picking), degradation flagging (>50% drop vs historical correlation), urgency determination (now, today, this_week, monitor), and hardcoded approval gating (equires_approval=True). Enforced structural architectural boundaries via code inspection tests.
+- **🛡️ Fixes & Hardening**: Enforced line length compliance across all models, removed unused test fixture variables, and verified that no execution/connector paths exist in DecisionSupport.
+- **📊 Test Results**: **51 passed** (100% green pass rate across all suites with 0 linting warnings).
