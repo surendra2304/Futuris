@@ -1,4 +1,4 @@
-.PHONY: install test lint run migrate
+.PHONY: install test test-db lint run migrate
 
 install:
 	pip install --upgrade pip
@@ -6,6 +6,9 @@ install:
 
 test:
 	pytest
+
+test-db:
+	pytest tests/storage/test_repositories.py
 
 lint:
 	ruff check .
