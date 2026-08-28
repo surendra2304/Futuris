@@ -1,9 +1,11 @@
-"""FastAPI application instance with OpenAPI contracts, error handlers, and v1 routers."""
+"""FastAPI application instance with OpenAPI contracts, error handlers, and UI static mount."""
 
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from futuris import __version__
@@ -53,6 +55,11 @@ app.include_router(scenarios_router)
 app.include_router(evaluation_router)
 app.include_router(events_router)
 app.include_router(models_router)
+
+# 4. Mount Production UI Build Output if available
+ui_dist_path = Path(__file__).parent.parent / "ui" / "dist"
+if ui_dist_path.exists():
+    app.mount("/ui", StaticFiles(directory=str(ui_dist_path), html=True), name="ui")
 
 
 @app.get("/health", tags=["Health"])
