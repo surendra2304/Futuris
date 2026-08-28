@@ -176,6 +176,12 @@ class DemoSeeder:
                 self.session, days, backtest_days, target
             )
 
+        from futuris.storage.db import engine
+        from futuris.storage.models import Base
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
         async with async_session_factory() as session:
             res = await self._execute_with_session(
                 session, days, backtest_days, target
