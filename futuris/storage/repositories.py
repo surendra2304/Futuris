@@ -22,6 +22,7 @@ from futuris.core.schemas import (
     ForecastEvent,
     ModelInfo,
     Outcome,
+    Scenario,
 )
 from futuris.storage.models import (
     EvaluationRunModel,
@@ -30,6 +31,7 @@ from futuris.storage.models import (
     ForecastModel,
     ModelRegistryModel,
     OutcomeModel,
+    ScenarioModel,
 )
 
 
@@ -501,3 +503,40 @@ class EvaluationRepository:
             "metrics": run.metrics,
             "created_at": run.created_at,
         }
+
+
+class ScenarioRepository:
+    """Repository storing scenario definitions and counterfactual override graphs."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, scenario: Scenario, parent_forecast_id: UUID | None = None) -> Scenario:
+        model = ScenarioModel(
+            scenario_id=scenario.scenario_id,
+            name=scenario.name,
+            scenario_type=scenario.scenario_type.value,
+            assumptions_override=scenario.interventions,
+            created_by="system",
+            parent_forecast_id=parent_forecast_id,
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return scenario
+
+    async def get(self, scenario_id: UUID) -> Scenario | None:
+        stmt = select(ScenarioModel).where(ScenarioModel.scenario_id == scenario_id)
+        result = await self.session.execute(stmt)
+        m = result.scalars().first()
+        if not m:
+            return None
+        from futuris.core.enums import ScenarioType
+
+        return Scenario(
+            scenario_id=m.scenario_id,
+            name=m.name,
+            scenario_type=ScenarioType(m.scenario_type),
+            graph_definition={},
+            interventions=m.assumptions_override,
+            narrative="",
+        )
