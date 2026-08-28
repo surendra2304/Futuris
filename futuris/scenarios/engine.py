@@ -109,15 +109,9 @@ class ScenarioEngine:
                 scenario_id=scenario_id,
                 name=spec.name,
                 scenario_type=spec.scenario_type,
-                graph_definition={
-                    "nodes": sim_graph.nodes,
-                    "edges": [
-                        {"source": e.source, "target": e.target, "sensitivity": e.sensitivity}
-                        for e in sim_graph.edges
-                    ],
-                },
-                interventions=spec.assumption_overrides,
-                narrative=spec.rationale,
+                assumptions_override=spec.assumption_overrides,
+                created_by=spec.created_by or "system",
+                parent_forecast_id=base_forecast.forecast_id,
             )
             await self.scenario_repo.create(scenario_record)
 

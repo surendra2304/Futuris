@@ -279,6 +279,9 @@ class OutcomeRepository:
         model = result.scalar_one_or_none()
         return self._to_domain(model) if model else None
 
+    async def get_by_forecast(self, forecast_id: UUID) -> Outcome | None:
+        return await self.get_for_forecast(forecast_id)
+
     async def list_unresolved(self, past_horizon: bool = True) -> list[Forecast]:
         now = datetime.now(UTC)
         stmt = (
@@ -461,6 +464,9 @@ class ModelRepository:
         ]
 
 
+ModelRegistryRepository = ModelRepository
+
+
 class EvaluationRepository:
     """Repository storing evaluation benchmarks and backtesting runs."""
 
@@ -516,9 +522,9 @@ class ScenarioRepository:
             scenario_id=scenario.scenario_id,
             name=scenario.name,
             scenario_type=scenario.scenario_type.value,
-            assumptions_override=scenario.interventions,
-            created_by="system",
-            parent_forecast_id=parent_forecast_id,
+            assumptions_override=scenario.assumptions_override,
+            created_by=scenario.created_by,
+            parent_forecast_id=parent_forecast_id or scenario.parent_forecast_id,
         )
         self.session.add(model)
         await self.session.flush()
@@ -536,7 +542,7 @@ class ScenarioRepository:
             scenario_id=m.scenario_id,
             name=m.name,
             scenario_type=ScenarioType(m.scenario_type),
-            graph_definition={},
-            interventions=m.assumptions_override,
-            narrative="",
+            assumptions_override=m.assumptions_override,
+            created_by=m.created_by,
+            parent_forecast_id=m.parent_forecast_id,
         )
