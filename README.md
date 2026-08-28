@@ -1,78 +1,56 @@
-# FUTURIS 🔮
+# FUTURIS — Operational Capacity & Predictive Intelligence Platform
 
-**Calibrated Predictive Intelligence & Multi-Horizon Forecasting Platform**
+FUTURIS is a production-grade, standalone forecasting and predictive-intelligence platform. It treats honest calibration, immutable evidence provenance, and decision boundaries as core architectural invariants.
 
-FUTURIS is a standalone predictive intelligence layer engineered to produce rigorous, calibrated forecasts, multi-branch scenario trees, uncertainty estimates, and real-time decision support.
+> **Prediction $\neq$ Authorization**: FUTURIS produces calibrated predictive distributions and advisory decision support, but never executes mitigations without explicit governance authorization.
 
 ---
 
-## 🏛️ Module Architecture
+## ⚡ Quickstart (5 Minutes)
 
-The codebase is organized into domain-isolated modules:
+Refer to the complete [**Platform Runbook**](scripts/runbook.md) for detailed operational instructions.
 
-`	ext
+```bash
+# 1. Start database
+docker compose up -d
+
+# 2. Run schema migrations
+python -m alembic upgrade head
+
+# 3. Seed demo data (180 days telemetry, live forecast, scenarios, backtests)
+python -m futuris.cli demo
+
+# 4. Start API server & React workspace
+python -m futuris.cli serve --port 8000
+```
+- **Dashboard UI**: [http://127.0.0.1:8000/ui](http://127.0.0.1:8000/ui)
+- **OpenAPI Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- **Metrics**: [http://127.0.0.1:8000/metrics](http://127.0.0.1:8000/metrics)
+
+---
+
+## 🏗️ Architecture & Subsystem Modules
+
+```
 futuris/
-├── core/         # Domain models, pipeline orchestration, lifecycle control
-├── models/       # Forecaster adapters, baselines, probabilistic models, routing
-├── features/     # Feature engineering, temporal transforms, lags, embeddings
-├── scenarios/    # Scenario graph definitions, counterfactuals, Monte Carlo engines
-├── agents/       # Specialized forecasting agents, reasoning loops, consensus
-├── evidence/     # Provenance tracking, source trust scoring, data snapshots
-├── evaluation/   # Benchmark suites, calibration metrics, backtesting, drift detection
-├── connectors/   # External data ingest adapters, streaming feeds
-├── api/          # REST API endpoints, event contracts, request schemas
-├── storage/      # Persistence layer, repositories, object storage abstractions
-├── infra/        # Configuration (pydantic-settings), structured logging, scheduler
-└── ui/           # Frontend dashboard (React + Vite + TypeScript placeholder)
-`
+├── core/            # Domain schemas, enums, resolution rules, lifecycle, pipeline
+├── storage/         # SQLAlchemy 2.0 async repositories, ORM models, alembic migrations
+├── connectors/      # Base connectors, synthetic telemetry generation
+├── evidence/        # Provenance tracking, source trust scoring, Parquet snapshots
+├── features/        # Normalization, contextualization, driver analysis (lead/lag)
+├── models/          # statsforecast adapters (AutoARIMA, AutoETS, Naive, Drift), routing
+├── evaluation/      # Metrics, calibration analysis (shrinkage, conformal), backtesting
+├── scenarios/       # Counterfactual specs, dependency DAGs, Monte Carlo simulations
+├── agents/          # SignalAnalyst, CalibrationAnalyst, deterministic fallbacks
+├── api/             # Versioned REST API (/v1), OpenAPI contracts, RFC 7807 errors
+├── infra/           # APScheduler, RBAC auth, append-only audit, Prometheus metrics
+├── ui/              # React + Vite + TypeScript + Tailwind workspace
+└── demo/            # Deterministic bootstrapping and demo data seeder
+```
 
 ---
 
-## 🚀 Development Phases
+## 🛡️ Security, Governance & Status
 
-1. **Phase 1: Project Scaffold** (Current) — Tech stack setup, environment config, structured JSON logging, container wiring, and CI.
-2. **Phase 2: Core Domain & Storage** — Async SQLAlchemy 2.0 schemas, Alembic migrations, base entity models.
-3. **Phase 3: Connectors & Ingestion** — Input adapters, streaming connectors, schema validation.
-4. **Phase 4: Feature Pipeline** — Temporal transformations, lagging, calendar features.
-5. **Phase 5: Baseline Forecasters** — Classical statistical & ML forecasting adapters.
-6. **Phase 6: Probabilistic Modeling** — Quantile regression, conformal prediction, interval calibration.
-7. **Phase 7: Scenario Graph & Simulation** — Counterfactual branching, graph traversal, Monte Carlo simulations.
-8. **Phase 8: Evidence & Provenance** — Source trust scoring, verifiable snapshotting.
-9. **Phase 9: Forecasting Agents** — Multi-agent consensus, LLM-augmented debate loops.
-10. **Phase 10: Evaluation & Drift Engine** — Rolling-origin backtesting, calibration metrics, distribution drift.
-11. **Phase 11: Scheduler & Orchestration** — APScheduler recurring pipelines, background workers.
-12. **Phase 12: REST API & Event Contracts** — Comprehensive API routes, webhooks, auth guards.
-13. **Phase 13: UI & Visualizations** — Interactive React dashboard, scenario tree explorer.
-14. **Phase 14: Hardening & Security** — Rate limiting, cryptographic audit trails, performance profiling.
-15. **Phase 15: Integration Benchmarking** — Multi-domain stress testing, synthetic dataset evaluations.
-16. **Phase 16: Production Packaging** — Deployment templates, observability dashboards, full release.
-
----
-
-## 🛠️ Quick Start
-
-### Local Installation
-`ash
-make install
-`
-
-### Run Tests & Linters
-`ash
-make test
-make lint
-`
-
-### Run API Server
-`ash
-make run
-`
-
-### Docker Compose
-`ash
-docker compose up -d postgres
-`
-
----
-
-## 📖 Engineering Diary
-All daily progress and architectural decisions are tracked in [FUTURIS_DIARY.md](FUTURIS_DIARY.md) and the [diary/](diary/) directory.
+- **Phases 0–4 (Complete)**: Core engine, persistence repositories, synthetic telemetry connectors, feature engineering, statsforecast adapters, statistical calibration, lifecycle outcome resolution, counterfactual scenarios, driver extraction, minimal advisory agents, versioned REST API, autonomous scheduler, React UI, and RBAC governance.
+- **Phases 5–6 (Queued)**: External platform ecosystem adapters (NEXUS, FRIDAY).

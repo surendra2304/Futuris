@@ -60,7 +60,7 @@ class ForecastRepository:
                 snapshot_path=e.snapshot_path,
                 content_hash=e.content_hash,
             )
-            for e in model.evidence
+            for e in model.evidence_refs
         ]
         drivers_list = [
             Driver(
@@ -136,7 +136,7 @@ class ForecastRepository:
             scenario_id=forecast.scenario_id,
             created_at=now,
             updated_at=now,
-            evidence=evidence_models,
+            evidence_refs=evidence_models,
         )
         self.session.add(model)
 

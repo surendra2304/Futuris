@@ -12,6 +12,11 @@ class ReliabilityCurve:
     bin_centers: list[float]
     observed_frequencies: list[float]
     bin_counts: list[int]
+    calibration_error: float = 0.0
+
+    @property
+    def expected_calibration_error(self) -> float:
+        return self.calibration_error
 
 
 class CalibrationAnalyzer:
@@ -53,10 +58,20 @@ class CalibrationAnalyzer:
             observed_freqs.append(round(obs_freq, 4))
             counts.append(count)
 
+        total_samples = sum(counts)
+        if total_samples > 0:
+            ece = sum(
+                (c / total_samples) * abs(f - center)
+                for c, f, center in zip(counts, observed_freqs, centers, strict=False)
+            )
+        else:
+            ece = 0.0
+
         return ReliabilityCurve(
             bin_centers=centers,
             observed_frequencies=observed_freqs,
             bin_counts=counts,
+            calibration_error=round(float(ece), 4),
         )
 
     def apply_hierarchical_shrinkage(

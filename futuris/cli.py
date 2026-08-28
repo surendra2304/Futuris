@@ -179,5 +179,37 @@ def serve(
     uvicorn.run("futuris.api.app:app", host=host, port=port, reload=reload)
 
 
+@cli.command("demo")
+def demo(
+    days: int = typer.Option(180, "--days", "-d", help="Days of telemetry to synthesize"),
+    backtest_days: int = typer.Option(30, "--backtest-days", "-b", help="Backtest days"),
+    seed: int = typer.Option(42, "--seed", "-s", help="Random seed for deterministic generation"),
+) -> None:
+    """Bootstrap full demo environment with telemetry, forecasts, scenarios, and sweeps."""
+
+    async def _run() -> None:
+        from futuris.demo.seed import DemoSeeder
+
+        typer.echo(f"Bootstrapping FUTURIS demo environment (seed={seed}, days={days})...")
+        seeder = DemoSeeder(seed=seed)
+        res = await seeder.run(days=days, backtest_days=backtest_days)
+
+        typer.echo("==================================================")
+        typer.echo("FUTURIS DEMO ENVIRONMENT SEEDED SUCCESSFULLY:")
+        typer.echo(f"Ingested Points:       {res['telemetry_points']}")
+        typer.echo(f"Live Forecast ID:      {res['live_forecast_id']}")
+        typer.echo(f"Live Prediction:       {res['live_prediction']:.2f} rpm")
+        typer.echo(f"Event Probability:     {(res['live_probability'] or 0.0)*100:.1f}%")
+        typer.echo(f"Meta-Confidence:       {res['live_confidence'].upper()}")
+        typer.echo(f"Scenarios Evaluated:   {res['scenarios_evaluated']}")
+        typer.echo(f"Backtest Evaluations:  {res['backtest_runs']}")
+        typer.echo(f"Resolved Outcomes:     {res['resolved_outcomes']}")
+        typer.echo(f"Expected Calib Error:  {res['calibration_ece']:.4f}")
+        typer.echo("==================================================")
+        typer.echo("Ready to explore! Start server via 'futuris serve' and open http://127.0.0.1:8000/ui")
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     cli()
