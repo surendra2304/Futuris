@@ -3,8 +3,12 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import httpx
+import pandas as pd
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from futuris.core import (
     ConfidenceLevel,
@@ -22,6 +26,20 @@ from futuris.core import (
     ScenarioType,
     SignalClass,
     SourceTrust,
+)
+from futuris.core.lifecycle import LifecycleManager
+from futuris.core.resolution import OutcomeResolver
+from futuris.core.thresholds import AlertThreshold, ThresholdMonitor
+from futuris.infra.events import (
+    EventEmitter,
+    WebhookSubscription,
+    sign_payload,
+)
+from futuris.storage.models import Base
+from futuris.storage.repositories import (
+    EventRepository,
+    ForecastRepository,
+    OutcomeRepository,
 )
 
 
@@ -247,3 +265,285 @@ def test_forecast_event_and_model_info():
     assert model_info.family == "statsforecast.AutoARIMA"
     assert model_info.benchmark_scores["crps"] == 0.042
     assert HorizonBucket.DAYS == "days"
+
+
+# --- Phase 7: Outcome Resolution, Lifecycle, Thresholds & Webhook Tests ---
+
+
+@pytest_asyncio.fixture
+async def lifecycle_session() -> AsyncSession:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as session:
+        yield session
+    await engine.dispose()
+
+
+def test_outcome_resolver_true_false_and_ambiguous_paths():
+    """Verify outcome resolution logic for true, false, and data gap ambiguity."""
+    resolver = OutcomeResolver()
+    as_of = datetime(2026, 8, 28, 12, 0, 0, tzinfo=UTC)
+    evidence_id = uuid4()
+    f = Forecast(
+        forecast_id=uuid4(),
+        target="service:checkout:capacity_exceedance_24h",
+        as_of=as_of,
+        horizon=timedelta(hours=24),
+        expires_at=as_of + timedelta(hours=24),
+        prediction=3500.0,
+        range_lower=3000.0,
+        range_upper=4200.0,
+        probability=0.75,
+        confidence=ConfidenceLevel.HIGH,
+        drivers=[
+            Driver(
+                name="traffic",
+                direction="positive",
+                strength=0.8,
+                leading_or_lagging="leading",
+                evidence_refs=[evidence_id],
+            )
+        ],
+        evidence=[
+            EvidenceRef(
+                evidence_id=evidence_id,
+                source="telemetry:synthetic",
+                source_trust=SourceTrust.HIGH,
+                signal_class=SignalClass.TELEMETRY,
+                as_of=as_of,
+                snapshot_path="/tmp/snap.parquet",
+                content_hash="mockhash",
+            )
+        ],
+        model_version="auto_arima@v1:hash",
+        assumptions=["stable architecture"],
+        review_at=as_of + timedelta(hours=6),
+        status=ForecastStatus.ACTIVE,
+    )
+    timestamps = [as_of + timedelta(minutes=5 * i) for i in range(1, 289)]
+
+    # 1. True path: max demand exceeds 4000.0
+    values_exceed = [3500.0] * 280 + [4200.0] * 8
+    df_true = pd.DataFrame({"timestamp": timestamps, "value": values_exceed})
+    outcome_true = resolver.resolve_forecast(f, df_true)
+    assert outcome_true.event_occurred is True
+    assert outcome_true.observed_value == 4200.0
+    assert outcome_true.resolution_method == ResolutionMethod.AUTOMATIC
+
+    # 2. False path: max demand strictly below 4000.0
+    values_below = [3500.0] * 288
+    df_false = pd.DataFrame({"timestamp": timestamps, "value": values_below})
+    outcome_false = resolver.resolve_forecast(f, df_false)
+    assert outcome_false.event_occurred is False
+    assert outcome_false.observed_value == 3500.0
+    assert outcome_false.resolution_method == ResolutionMethod.AUTOMATIC
+
+    # 3. Ambiguous path: major observation gaps (> 20%)
+    df_gaps = pd.DataFrame({"timestamp": timestamps[:50], "value": values_below[:50]})
+    outcome_ambiguous = resolver.resolve_forecast(f, df_gaps)
+    assert outcome_ambiguous.resolution_method == ResolutionMethod.AMBIGUOUS
+    assert outcome_ambiguous.event_occurred is None
+    assert "Excessive observation gaps" in (outcome_ambiguous.ambiguity_note or "")
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_manager_assumption_invalidation_and_resolution(
+    lifecycle_session: AsyncSession,
+):
+    """Verify assumption breaks invalidate forecasts and elapsed horizons resolve outcomes."""
+    f_repo = ForecastRepository(lifecycle_session)
+    o_repo = OutcomeRepository(lifecycle_session)
+    e_repo = EventRepository(lifecycle_session)
+    manager = LifecycleManager(f_repo, o_repo, e_repo)
+
+    as_of = datetime(2026, 8, 28, 12, 0, 0, tzinfo=UTC)
+    evidence_id = uuid4()
+    f = Forecast(
+        forecast_id=uuid4(),
+        target="service:checkout:capacity_exceedance_24h",
+        as_of=as_of,
+        horizon=timedelta(hours=24),
+        expires_at=as_of + timedelta(hours=24),
+        prediction=3500.0,
+        range_lower=3000.0,
+        range_upper=4200.0,
+        probability=0.75,
+        confidence=ConfidenceLevel.HIGH,
+        drivers=[
+            Driver(
+                name="traffic",
+                direction="positive",
+                strength=0.8,
+                leading_or_lagging="leading",
+                evidence_refs=[evidence_id],
+            )
+        ],
+        evidence=[
+            EvidenceRef(
+                evidence_id=evidence_id,
+                source="telemetry:synthetic",
+                source_trust=SourceTrust.HIGH,
+                signal_class=SignalClass.TELEMETRY,
+                as_of=as_of,
+                snapshot_path="/tmp/snap.parquet",
+                content_hash="mockhash",
+            )
+        ],
+        model_version="auto_arima@v1:hash",
+        assumptions=["stable architecture"],
+        review_at=as_of + timedelta(hours=6),
+        status=ForecastStatus.ACTIVE,
+    )
+    await f_repo.create(f)
+
+    # Invalidation on assumption break
+    capacity_events = [
+        {
+            "timestamp": as_of + timedelta(hours=2),
+            "new_capacity": 3000.0,
+        }
+    ]
+    timestamps = [as_of + timedelta(minutes=5 * i) for i in range(1, 289)]
+    df_obs = pd.DataFrame({"timestamp": timestamps, "value": [3200.0] * 288})
+
+    report_inv = await manager.run_lifecycle_sweep(
+        observations_df=df_obs,
+        capacity_events=capacity_events,
+        as_of=as_of + timedelta(hours=5),
+    )
+    assert report_inv.invalidated_count == 1
+
+    inv_forecast = await f_repo.get(f.forecast_id)
+    assert inv_forecast is not None
+    assert inv_forecast.status == ForecastStatus.INVALIDATED
+
+    # Resolution on elapsed horizon
+    ev2_id = uuid4()
+    f2 = f.model_copy(
+        update={
+            "forecast_id": uuid4(),
+            "status": ForecastStatus.ACTIVE,
+            "evidence": [f.evidence[0].model_copy(update={"evidence_id": ev2_id})],
+            "drivers": [f.drivers[0].model_copy(update={"evidence_refs": [ev2_id]})],
+        }
+    )
+    await f_repo.create(f2)
+
+    report_res = await manager.run_lifecycle_sweep(
+        observations_df=df_obs,
+        as_of=f2.expires_at + timedelta(minutes=10),
+    )
+    assert report_res.resolved_count == 1
+    assert len(report_res.outcomes) == 1
+    assert report_res.outcomes[0].forecast_id == f2.forecast_id
+
+
+@pytest.mark.asyncio
+async def test_threshold_monitor_deduplication(lifecycle_session: AsyncSession):
+    """Verify ThresholdMonitor fires exactly once for crossing a probability threshold."""
+    e_repo = EventRepository(lifecycle_session)
+    monitor = ThresholdMonitor(event_repo=e_repo)
+
+    thresh_id = uuid4()
+    target_name = "service:checkout:capacity_exceedance_24h"
+    monitor.register_threshold(
+        AlertThreshold(
+            threshold_id=thresh_id,
+            target=target_name,
+            probability_floor=0.70,
+            direction="above",
+        )
+    )
+
+    as_of = datetime(2026, 8, 28, 12, 0, 0, tzinfo=UTC)
+    evidence_id = uuid4()
+    f = Forecast(
+        forecast_id=uuid4(),
+        target=target_name,
+        as_of=as_of,
+        horizon=timedelta(hours=24),
+        expires_at=as_of + timedelta(hours=24),
+        prediction=3500.0,
+        range_lower=3000.0,
+        range_upper=4200.0,
+        probability=0.75,
+        confidence=ConfidenceLevel.HIGH,
+        drivers=[
+            Driver(
+                name="traffic",
+                direction="positive",
+                strength=0.8,
+                leading_or_lagging="leading",
+                evidence_refs=[evidence_id],
+            )
+        ],
+        evidence=[
+            EvidenceRef(
+                evidence_id=evidence_id,
+                source="telemetry:synthetic",
+                source_trust=SourceTrust.HIGH,
+                signal_class=SignalClass.TELEMETRY,
+                as_of=as_of,
+                snapshot_path="/tmp/snap.parquet",
+                content_hash="mockhash",
+            )
+        ],
+        model_version="auto_arima@v1:hash",
+        assumptions=["stable architecture"],
+        review_at=as_of + timedelta(hours=6),
+        status=ForecastStatus.ACTIVE,
+    )
+
+    # First evaluation: probability (0.75) >= 0.70 -> Fires event
+    events_1 = await monitor.evaluate_forecast(f)
+    assert len(events_1) == 1
+    assert events_1[0].event_type == ForecastEventType.FORECAST_THRESHOLD_CROSSED
+
+    # Second evaluation on same forecast: De-duplicated -> 0 events
+    events_2 = await monitor.evaluate_forecast(f)
+    assert len(events_2) == 0
+
+
+@pytest.mark.asyncio
+async def test_hmac_webhook_signature_and_dispatch():
+    """Verify HMAC signature generation and webhook dispatch to mock endpoint."""
+    secret = "super_secret_signing_key_123"
+    payload = {"event": "test", "value": 42}
+    signature = sign_payload(payload, secret)
+
+    assert len(signature) == 64
+
+    received_requests = []
+
+    def mock_handler(request: httpx.Request):
+        received_requests.append(request)
+        return httpx.Response(200, json={"status": "received"})
+
+    transport = httpx.MockTransport(mock_handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        emitter = EventEmitter(http_client=client)
+        emitter.register_subscription(
+            WebhookSubscription(
+                subscription_id=uuid4(),
+                url="http://mock-webhook/receive",
+                event_types=[ForecastEventType.FORECAST_THRESHOLD_CROSSED],
+                secret=secret,
+            )
+        )
+
+        test_event = ForecastEvent(
+            event_id=uuid4(),
+            forecast_id=uuid4(),
+            event_type=ForecastEventType.FORECAST_THRESHOLD_CROSSED,
+            payload=payload,
+            emitted_at=datetime.now(UTC),
+        )
+        await emitter.emit(test_event)
+
+    assert len(received_requests) == 1
+    req = received_requests[0]
+    assert req.headers["X-Futuris-Event-Type"] == "forecast_threshold_crossed"
+    expected_sig = sign_payload(test_event.model_dump(mode="json"), secret)
+    assert req.headers["X-Futuris-Signature"] == expected_sig

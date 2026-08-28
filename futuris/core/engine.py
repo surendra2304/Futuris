@@ -1,4 +1,4 @@
-"""ForecastEngine: End-to-end forecasting pipeline orchestration."""
+"""ForecastEngine: End-to-end forecasting pipeline orchestration with calibration confidence."""
 
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -7,8 +7,9 @@ import numpy as np
 
 from futuris.connectors.base import BaseConnector
 from futuris.connectors.synthetic_telemetry import SyntheticTelemetryConnector
-from futuris.core.enums import ConfidenceLevel, ForecastStatus, SignalClass
+from futuris.core.enums import ForecastStatus, SignalClass
 from futuris.core.schemas import Driver, Forecast
+from futuris.evaluation.confidence import ConfidenceAssessor, confidence_assessor
 from futuris.evidence.snapshots import EvidenceSnapshotter
 from futuris.features.contextualize import ContextLayer
 from futuris.features.normalize import Normalizer
@@ -18,7 +19,7 @@ from futuris.models.routing import ModelRouter, SeriesMetadata
 
 
 class ForecastEngine:
-    """Orchestrates ingestion, normalization, features, model selection, and forecast assembly."""
+    """Orchestrates features, model selection, calibration, and forecast assembly."""
 
     def __init__(
         self,
@@ -27,12 +28,14 @@ class ForecastEngine:
         normalizer: Normalizer | None = None,
         context_layer: ContextLayer | None = None,
         router: ModelRouter | None = None,
+        assessor: ConfidenceAssessor | None = None,
     ) -> None:
         self.connector = connector or SyntheticTelemetryConnector(seed=42)
         self.snapshotter = snapshotter or EvidenceSnapshotter()
         self.normalizer = normalizer or Normalizer()
         self.context_layer = context_layer or ContextLayer()
         self.router = router or ModelRouter()
+        self.confidence_assessor = assessor or confidence_assessor
 
     async def orchestrate(
         self,
@@ -42,6 +45,7 @@ class ForecastEngine:
         capacity_threshold: float = 4000.0,
         history_lookback_days: int = 14,
         evidence_scope: str = "telemetry:synthetic",
+        historical_resolved_count: int = 0,
     ) -> list[Forecast]:
         """Produce a draft Forecast object for the target with zero future-data leakage."""
         as_of = as_of.replace(tzinfo=UTC) if as_of.tzinfo is None else as_of.astimezone(UTC)
@@ -120,7 +124,16 @@ class ForecastEngine:
 
         model_version_str = model_registry.get_version_string(best_adapter)
 
-        # 8. Construct Explanatory Drivers
+        # 8. Compute Meta-Confidence via ConfidenceAssessor
+        confidence_result = self.confidence_assessor.evaluate(
+            historical_resolved_count=historical_resolved_count,
+            backtest_sample_size=len(y_train),
+            long_run_mae=best_score,
+            recent_30d_mae=best_score,
+            quality_report=signal_set.quality_report,
+        )
+
+        # 9. Construct Explanatory Drivers
         y_mean = float(y_series.mean())
         y_std = float(y_series.std())
         strength_score = round(
@@ -136,7 +149,7 @@ class ForecastEngine:
             )
         ]
 
-        # 9. Assemble Forecast Domain Object
+        # 10. Assemble Forecast Domain Object
         expires_at = as_of + horizon
         review_at = as_of + (horizon / 4)
 
@@ -150,7 +163,7 @@ class ForecastEngine:
             range_lower=final_prediction.range_lower,
             range_upper=final_prediction.range_upper,
             probability=final_prediction.exceedance_probability,
-            confidence=ConfidenceLevel.LOW,
+            confidence=confidence_result.level,
             drivers=drivers,
             evidence=[evidence_ref],
             model_version=model_version_str,

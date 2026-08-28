@@ -4,8 +4,8 @@ Comprehensive chronological engineering log, architectural evolution, and daily 
 
 ---
 
-### 📈 [Day 1 — 2026-08-28: Phases 1 to 5 — Scaffold, Storage, Ingestion, Features & Forecasting Engine](diary/2026-08-28.md)
-- **🎯 Focus**: StatsForecast model adapters, probabilistic exceedance modeling, model registry, deterministic router, and ForecastEngine pipeline orchestration.
-- **💡 What I Accomplished**: Implemented ModelAdapter protocol and wrapped statsforecast estimators (Naive, SeasonalNaive, RandomWalkWithDrift, AutoETS, AutoARIMA, and MeanEnsemble). Built empirical residual bootstrapping and normal distribution exceedance probability estimators. Created ModelRouter with pure heuristic ranking and ForecastEngine.orchestrate generating draft Forecast objects with zero future-data leakage and byte-level reproducibility. Authored 34 passing tests.
-- **🛡️ Fixes & Hardening**: Fixed statsforecast import bindings, cleaned up trailing newlines, and verified diary line-count compliance.
-- **📊 Test Results**: **34 passed** (100% green pass rate across schemas, storage repositories, connectors, features, and model engine).
+### 📈 [Day 1 — 2026-08-28: Phases 1 to 7 — Scaffold, Persistence, Ingestion, Forecasting, Calibration & Lifecycle Loop](diary/2026-08-28.md)
+- **🎯 Focus**: Probabilistic evaluation, binned calibration, hierarchical shrinkage, confidence assessment, walk-forward backtesting, drift detection, snapshot-anchored outcome resolution, forecast lifecycle management, threshold monitoring, and HMAC webhook dispatching.
+- **💡 What I Accomplished**: Built uturis/evaluation/ (metrics.py, calibration.py, confidence.py, drift.py, acktest.py), uturis/core/resolution.py, uturis/core/lifecycle.py, uturis/core/thresholds.py, and uturis/infra/events.py. Implemented versioned resolution rules, ambiguity detection for data gaps, assumption break invalidation, expiry sweeps, and HMAC-signed webhook dispatches. Authored 44 tests across all subsystems.
+- **🛡️ Fixes & Hardening**: Resolved circular imports between ForecastEngine and BacktestEngine, unified UTC timezone comparisons with _ensure_utc, and enforced unique evidence_id constraints across all test fixtures.
+- **📊 Test Results**: **44 passed** (100% green pass rate across all suites with 0 linting warnings).
