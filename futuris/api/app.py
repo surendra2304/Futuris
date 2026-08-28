@@ -10,12 +10,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from futuris import __version__
 from futuris.api.errors import register_error_handlers
+from futuris.api.routers.audit import router as audit_router
 from futuris.api.routers.evaluation import router as evaluation_router
 from futuris.api.routers.events import router as events_router
 from futuris.api.routers.forecasts import router as forecasts_router
 from futuris.api.routers.models import router as models_router
 from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.infra.logging import configure_logging, get_logger
+from futuris.infra.metrics import metrics_endpoint
 
 configure_logging()
 logger = get_logger("futuris.api")
@@ -55,11 +57,18 @@ app.include_router(scenarios_router)
 app.include_router(evaluation_router)
 app.include_router(events_router)
 app.include_router(models_router)
+app.include_router(audit_router)
 
 # 4. Mount Production UI Build Output if available
 ui_dist_path = Path(__file__).parent.parent / "ui" / "dist"
 if ui_dist_path.exists():
     app.mount("/ui", StaticFiles(directory=str(ui_dist_path), html=True), name="ui")
+
+
+@app.get("/metrics", tags=["Observability"])
+async def get_metrics() -> Response:
+    """Prometheus metrics scrape endpoint."""
+    return metrics_endpoint()
 
 
 @app.get("/health", tags=["Health"])

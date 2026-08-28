@@ -11,8 +11,10 @@ from futuris.connectors.synthetic_telemetry import SyntheticTelemetryConnector
 from futuris.core.lifecycle import LifecycleManager
 from futuris.core.pipeline import ForecastingPipeline
 from futuris.evaluation.backtest import BacktestEngine
+from futuris.infra.auth import generate_api_key
 from futuris.infra.logging import get_logger
 from futuris.storage.db import async_session_factory
+from futuris.storage.models import ApiKeyModel
 from futuris.storage.repositories import (
     EventRepository,
     ForecastRepository,
@@ -132,6 +134,36 @@ def sweep() -> None:
                 f"Lifecycle Sweep: Resolved={report.resolved_count}, "
                 f"Invalidated={report.invalidated_count}, Expired={report.expired_count}"
             )
+
+    asyncio.run(_run())
+
+
+@cli.command("create-admin-key")
+def create_admin_key(
+    label: str = typer.Option("bootstrap-admin", "--label", "-l", help="Key identifier label"),
+) -> None:
+    """Bootstrap a root admin API key with full platform permissions."""
+
+    async def _run() -> None:
+        plain_key, key_hash = generate_api_key(prefix="futuris_admin")
+        now = datetime.now(UTC)
+        async with async_session_factory() as session:
+            record = ApiKeyModel(
+                key_hash=key_hash,
+                label=label,
+                role="admin",
+                created_at=now,
+                revoked_at=None,
+            )
+            session.add(record)
+            await session.commit()
+
+        typer.echo("==================================================")
+        typer.echo("FUTURIS ADMIN API KEY CREATED (STORE SECURELY):")
+        typer.echo(f"Key Label: {label}")
+        typer.echo("Role:      ADMIN")
+        typer.echo(f"API Key:   {plain_key}")
+        typer.echo("==================================================")
 
     asyncio.run(_run())
 

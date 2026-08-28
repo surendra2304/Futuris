@@ -422,7 +422,11 @@ class ModelRepository:
         await self.session.flush()
         return model_info
 
-    async def promote(self, model_version: str) -> ModelInfo:
+    async def promote(
+        self,
+        model_version: str,
+        max_benchmark_age_days: int = 30,
+    ) -> ModelInfo:
         stmt = select(ModelRegistryModel).where(ModelRegistryModel.model_version == model_version)
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
@@ -434,7 +438,57 @@ class ModelRepository:
             msg = f"Promotion rejected: Model '{model_version}' has no benchmark scores attached."
             raise ModelPromotionError(msg)
 
+        # Check benchmark run freshness
+        eval_stmt = (
+            select(EvaluationRunModel)
+            .where(EvaluationRunModel.model_version == model_version)
+            .order_by(EvaluationRunModel.created_at.desc())
+        )
+        eval_res = await self.session.execute(eval_stmt)
+        recent_eval = eval_res.scalars().first()
+
         now = datetime.now(UTC)
+        if recent_eval:
+            age_days = (now - recent_eval.created_at).total_seconds() / 86400.0
+            if age_days > max_benchmark_age_days:
+                msg = (
+                    f"Promotion rejected: Benchmark for '{model_version}' is {age_days:.1f} "
+                    f"days old (max permitted: {max_benchmark_age_days} days)."
+                )
+                raise ModelPromotionError(msg)
+
+        # Check performance against current active model in the same family
+        active_models = await self.current_active(family=model.family)
+        candidate_mae = model.benchmark_scores.get("mae", float("inf"))
+        candidate_ece = model.benchmark_scores.get("ece", float("inf"))
+
+        for active_m in active_models:
+            if active_m.model_version == model_version:
+                continue
+            active_mae = active_m.benchmark_scores.get("mae", 0.0)
+            active_ece = active_m.benchmark_scores.get("ece", 0.0)
+
+            # Gate: candidate cannot be worse on MAE or calibration error
+            if active_mae > 0 and candidate_mae > active_mae:
+                msg = (
+                    f"Promotion rejected: Candidate MAE ({candidate_mae:.2f}) is worse than "
+                    f"current active model '{active_m.model_version}' MAE ({active_mae:.2f})."
+                )
+                raise ModelPromotionError(msg)
+            if active_ece > 0 and candidate_ece > active_ece:
+                msg = (
+                    f"Promotion rejected: Candidate ECE ({candidate_ece:.4f}) is worse than "
+                    f"current active model '{active_m.model_version}' ECE ({active_ece:.4f})."
+                )
+                raise ModelPromotionError(msg)
+
+        # Deactivate existing active models in the family
+        await self.session.execute(
+            update(ModelRegistryModel)
+            .where(ModelRegistryModel.family == model.family)
+            .values(is_active=False)
+        )
+
         model.is_active = True
         model.promoted_at = now
         await self.session.flush()
