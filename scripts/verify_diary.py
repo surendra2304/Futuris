@@ -28,4 +28,6 @@ def verify_diary(file_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    verify_diary(Path("diary/2026-08-28.md"))
+    diary_dir = Path("diary")
+    for diary_file in sorted(diary_dir.glob("*.md")):
+        verify_diary(diary_file)
