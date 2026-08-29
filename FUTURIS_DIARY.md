@@ -4,8 +4,16 @@ Comprehensive chronological engineering log, architectural evolution, and daily 
 
 ---
 
-### 📈 [Day 1 — 2026-08-28: Phases 1 to 16 — All 16 Build Prompts Complete](diary/2026-08-28.md)
-- **🎯 Focus**: Ecosystem integration surfaces (`NexusConnector`, `FridayClient`, `SentinelSecurityEvent`), typed contracts, event contract documentation (`docs/events.md`), architectural boundary enforcement, and integration test suite.
-- **💡 What I Accomplished**: Built `futuris/connectors/nexus.py` (`NexusConnector` with authenticated HTTP queries), `futuris/integrations/friday_client.py` (`FridayClient` SDK with 'Simulate Before Act' patterns), `futuris/integrations/sentinel_schema.py` (`SentinelSecurityEvent` adapter), `futuris/integrations/README.md`, `docs/events.md`, and integration test suite `tests/test_integrations.py`.
-- **🛡️ Fixes & Hardening**: Fixed Pydantic validation in `FridayClient` to parse `ForecastResponse`, added UTC normalization in `NexusConnector`, and verified all 74 unit, integration, and e2e tests passing cleanly with 0 linter warnings.
-- **📊 Test Results**: **74 passed** (100% green pass rate across all 16 build phases, API endpoints, UI, governance, and integrations with 0 linting warnings).
+### 📈 [Day 1 — 2026-08-28: Phases 1 to 16, FRIDAY Delegation, TradingBot & Forge Forecasting](diary/2026-08-28.md)
+- **🎯 Focus**: End-to-end 16 build phases, React workspace, RBAC governance, demo seeder, FRIDAY delegation API (`/v1/friday/*`), TradingBot telemetry & market regime routing, and Forge capacity forecasting.
+- **💡 What I Accomplished**: Built core time-series forecasting engine, statsforecast adapters, calibration engine, lifecycle sweeps, scenarios, React UI, governance gates, FRIDAY delegation router, `TradingBotConnector`, `MarketRegimeForecaster`, `ForgeConnector`, and `ForgeBuildPredictor`.
+- **🛡️ Fixes & Hardening**: Fixed SQLite JSONB compatibility, `evidence_refs` ORM mapping, and rate-limiting auth verification.
+- **📊 Test Results**: **79 passed** (100% green pass rate with 0 linting warnings).
+
+---
+
+### 📈 [Day 2 — 2026-08-29: IntelX Context Injection, AI-Universe Model Enhancer & Prometheus Metrics](diary/2026-08-29.md)
+- **🎯 Focus**: IntelX qualitative research ingestion (`IntelXContextInjector`), AI-Universe enhanced model intervals (`AIUniverseModelEnhancer`), human-readable narrative explanations (`ForecastExplanationGenerator`), and Prometheus observability instrumentation.
+- **💡 What I Accomplished**: Built `futuris/connectors/intelx_context.py` (sentiment and volatility multipliers from research reports), `futuris/models/ai_universe_enhanced.py` (qualitative uncertainty modulation and decision-grade narratives), expanded Prometheus counters/gauges in `futuris/infra/metrics.py`, and added test suite `tests/test_intelx_and_enhancements.py`.
+- **🛡️ Fixes & Hardening**: Fixed driver direction string/enum handling in narrative generation, ensured 100% test pass rate across all 82 automated test cases.
+- **📊 Test Results**: **82 passed** (100% green pass rate with 0 linting warnings).
