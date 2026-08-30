@@ -48,3 +48,6 @@ addopts = "-ra -q"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.hatch.build.targets.wheel]
+packages = ["futuris"]
