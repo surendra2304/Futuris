@@ -11,11 +11,18 @@ from sqlalchemy.ext.asyncio import (
 
 from futuris.infra.config import settings
 
+engine_kwargs = {
+    "echo": (settings.LOG_LEVEL.upper() == "DEBUG"),
+    "future": True,
+}
+if "sqlite" in settings.DATABASE_URL:
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    engine_kwargs["pool_pre_ping"] = True
+
 engine: AsyncEngine = create_async_engine(
     settings.DATABASE_URL,
-    echo=(settings.LOG_LEVEL.upper() == "DEBUG"),
-    future=True,
-    pool_pre_ping=True,
+    **engine_kwargs,
 )
 
 async_session_factory = async_sessionmaker(

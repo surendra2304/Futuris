@@ -39,9 +39,45 @@ class Settings(BaseSettings):
         default="INFO",
         description="Logging level threshold.",
     )
+    FUTURIS_API_KEY: str = Field(
+        default="futuris_api",
+        description="Master API authentication key for Futuris",
+    )
     API_KEYS_ENABLED: bool = Field(
-        default=False,
-        description="Whether API key authentication is enforced on API endpoints.",
+        default=True,
+        description="Whether API key authentication is enforced on API endpoints (always True).",
+    )
+    INFERENCE_URL: str = Field(
+        default="https://inference-3i2b.onrender.com",
+        description="Live Inference Gateway URL",
+    )
+    INFERENCE_API_KEY: str = Field(
+        default="inference_api",
+        description="Live Inference Gateway API Key",
+    )
+    MEMORA_URL: str = Field(
+        default="https://memora-9zr9.onrender.com",
+        description="Live Memora Cloud Memory URL",
+    )
+    MEMORA_API_KEY: str = Field(
+        default="memora_api",
+        description="Live Memora Cloud Memory API Key",
+    )
+    STRATEX_URL: str = Field(
+        default="https://stratex-ucjz.onrender.com",
+        description="Live Stratex Trading Bot URL",
+    )
+    STRATEX_API_KEY: str = Field(
+        default="stratex_api",
+        description="Live Stratex Trading Bot API Key",
+    )
+    INTELX_URL: str = Field(
+        default="https://intelx-3cz1.onrender.com",
+        description="Live IntelX Intelligence Engine URL",
+    )
+    INTELX_API_KEY: str = Field(
+        default="intelx_api",
+        description="Live IntelX Intelligence Engine API Key",
     )
 
 
