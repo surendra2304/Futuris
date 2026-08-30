@@ -73,7 +73,17 @@ async def get_metrics() -> Response:
     return metrics_endpoint()
 
 
-@app.get("/health", tags=["Health"])
+@app.api_route("/", methods=["GET", "HEAD"], tags=["Root"])
+async def root() -> dict[str, Any]:
+    """Root endpoint for UptimeRobot / uptime probes."""
+    return {
+        "status": "ok",
+        "service": "FUTURIS",
+        "version": __version__,
+    }
+
+
+@app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
 async def health_check() -> dict[str, Any]:
     """Health check endpoint returning system status and current version."""
     return {
