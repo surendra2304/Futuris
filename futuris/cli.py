@@ -1,6 +1,7 @@
 """Futuris unified command-line interface for ingestion, forecasts, sweeps, and server."""
 
 import asyncio
+import os
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
@@ -170,13 +171,15 @@ def create_admin_key(
 
 @cli.command("serve")
 def serve(
-    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Bind host"),
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Bind host"),
     port: int = typer.Option(8000, "--port", "-p", help="Bind port"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
 ) -> None:
     """Start the FastAPI public API server."""
-    typer.echo(f"Starting Futuris API Server on http://{host}:{port}")
-    uvicorn.run("futuris.api.app:app", host=host, port=port, reload=reload)
+    bind_port = int(os.getenv("PORT", str(port)))
+    bind_host = os.getenv("HOST", host)
+    typer.echo(f"Starting Futuris API Server on http://{bind_host}:{bind_port}")
+    uvicorn.run("futuris.api.app:app", host=bind_host, port=bind_port, reload=reload)
 
 
 @cli.command("demo")
