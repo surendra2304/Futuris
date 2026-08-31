@@ -1,1 +1,1 @@
-﻿"""Test module initialization."""
+"""Test module initialization."""

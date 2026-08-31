@@ -20,8 +20,8 @@ class Settings(BaseSettings):
         description="Application running environment mode.",
     )
     DATABASE_URL: str = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/futuris",
-        description="Async connection string for PostgreSQL database.",
+        default="sqlite+aiosqlite:///./data/futuris.db",
+        description="Async connection string for database (SQLite or PostgreSQL).",
     )
     OBJECT_STORE_PATH: str = Field(
         default="./data/storage",
