@@ -40,12 +40,20 @@ class DriverAnalyzer:
         f_vals = clean_df["feat"].to_numpy()
         t_vals = clean_df["target"].to_numpy()
 
+        if np.std(f_vals) == 0 or np.std(t_vals) == 0:
+            return "lagging", 0, 0.0
+
         corrs: dict[int, float] = {}
         for lag in range(0, self.max_lag_steps + 1):
             if lag == 0:
                 c = np.corrcoef(f_vals, t_vals)[0, 1]
             else:
-                c = np.corrcoef(f_vals[:-lag], t_vals[lag:])[0, 1]
+                f_slice = f_vals[:-lag]
+                t_slice = t_vals[lag:]
+                if np.std(f_slice) == 0 or np.std(t_slice) == 0:
+                    c = 0.0
+                else:
+                    c = np.corrcoef(f_slice, t_slice)[0, 1]
             corrs[lag] = float(0.0 if np.isnan(c) else c)
 
         best_lag = max(corrs.keys(), key=lambda k: abs(corrs[k]))
@@ -65,12 +73,22 @@ class DriverAnalyzer:
         if len(clean_df) < recent_window_steps * 2:
             return 1.0, 1.0, False
 
-        long_corr = abs(float(np.corrcoef(clean_df["feat"], clean_df["target"])[0, 1]))
+        f_all = clean_df["feat"].to_numpy()
+        t_all = clean_df["target"].to_numpy()
+        if np.std(f_all) == 0 or np.std(t_all) == 0:
+            long_corr = 0.0
+        else:
+            long_corr = abs(float(np.corrcoef(f_all, t_all)[0, 1]))
         if np.isnan(long_corr):
             long_corr = 0.0
 
         recent_slice = clean_df.iloc[-recent_window_steps:]
-        recent_corr = abs(float(np.corrcoef(recent_slice["feat"], recent_slice["target"])[0, 1]))
+        f_rec = recent_slice["feat"].to_numpy()
+        t_rec = recent_slice["target"].to_numpy()
+        if np.std(f_rec) == 0 or np.std(t_rec) == 0:
+            recent_corr = 0.0
+        else:
+            recent_corr = abs(float(np.corrcoef(f_rec, t_rec)[0, 1]))
         if np.isnan(recent_corr):
             recent_corr = 0.0
 
