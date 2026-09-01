@@ -30,5 +30,6 @@ ENV/
 htmlcov/
 .ruff_cache/
 
+data/
 data/storage/
 postgres_data/
