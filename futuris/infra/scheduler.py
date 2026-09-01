@@ -200,7 +200,8 @@ class ForecastScheduler:
     async def shutdown(self) -> None:
         """Gracefully drain running jobs and shutdown scheduler."""
         logger.info("scheduler_shutdown_requested")
-        self.scheduler.shutdown(wait=True)
+        if self.scheduler.running:
+            self.scheduler.shutdown(wait=True)
         if self._in_flight_tasks:
             await asyncio.gather(*self._in_flight_tasks, return_exceptions=True)
         logger.info("scheduler_shutdown_complete")

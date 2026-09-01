@@ -172,7 +172,35 @@ def upgrade() -> None:
     )
 
 
+    # 10. api_keys table
+    op.create_table(
+        "api_keys",
+        sa.Column("key_hash", sa.String(length=64), nullable=False),
+        sa.Column("label", sa.String(length=255), nullable=False),
+        sa.Column("role", sa.String(length=32), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.PrimaryKeyConstraint("key_hash"),
+    )
+
+    # 11. audit_logs table
+    op.create_table(
+        "audit_logs",
+        sa.Column("audit_id", sa.UUID(), nullable=False),
+        sa.Column("actor_label", sa.String(length=255), nullable=False),
+        sa.Column("action", sa.String(length=128), nullable=False),
+        sa.Column("entity", sa.String(length=128), nullable=False),
+        sa.Column("entity_id", sa.String(length=255), nullable=False),
+        sa.Column("payload_hash", sa.String(length=64), nullable=False),
+        sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
+        sa.PrimaryKeyConstraint("audit_id"),
+    )
+    op.create_index("ix_audit_logs_timestamp", "audit_logs", ["timestamp"])
+
+
 def downgrade() -> None:
+    op.drop_table("audit_logs")
+    op.drop_table("api_keys")
     op.drop_table("evaluation_runs")
     op.drop_table("model_registry")
     op.drop_table("signal_sources")

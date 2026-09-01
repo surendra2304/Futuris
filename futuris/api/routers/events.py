@@ -44,7 +44,7 @@ async def list_events(
     if event_type:
         events = await event_repo.list_by_type(event_type)
     else:
-        events = []
+        events = await event_repo.list_all(limit=limit)
 
     if since:
         events = [e for e in events if e.emitted_at >= since]

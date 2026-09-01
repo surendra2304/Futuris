@@ -198,6 +198,23 @@ async def test_event_repository_append_only_enforcement(test_session: AsyncSessi
     )
     await event_repo.append(event)
 
+    # Verify list_by_type and list_all
+    typed_events = await event_repo.list_by_type(ForecastEventType.FORECAST_CREATED)
+    assert len(typed_events) == 1
+    all_events = await event_repo.list_all(limit=10)
+    assert len(all_events) == 1
+
+    # Verify model-level event without forecast_id
+    model_event = ForecastEvent(
+        event_id=uuid4(),
+        forecast_id=None,
+        event_type=ForecastEventType.MODEL_DEGRADED,
+        payload={"model_version": "auto_arima@v1", "reason": "drift detected"},
+        emitted_at=datetime.now(UTC),
+    )
+    saved_model_ev = await event_repo.append(model_event)
+    assert saved_model_ev.forecast_id is None
+
     # Verify update and delete raise ReadOnlyAuditViolationError
     with pytest.raises(ReadOnlyAuditViolationError):
         await event_repo.update()

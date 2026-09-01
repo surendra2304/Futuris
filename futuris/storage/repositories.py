@@ -384,6 +384,42 @@ class EventRepository:
             for m in result.scalars().all()
         ]
 
+    async def list_by_type(self, event_type: ForecastEventType) -> list[ForecastEvent]:
+        stmt = (
+            select(ForecastEventModel)
+            .where(ForecastEventModel.event_type == event_type.value)
+            .order_by(ForecastEventModel.emitted_at.asc())
+        )
+        result = await self.session.execute(stmt)
+        return [
+            ForecastEvent(
+                event_id=m.event_id,
+                forecast_id=m.forecast_id,
+                event_type=ForecastEventType(m.event_type),
+                payload=m.payload,
+                emitted_at=m.emitted_at,
+            )
+            for m in result.scalars().all()
+        ]
+
+    async def list_all(self, limit: int = 100) -> list[ForecastEvent]:
+        stmt = (
+            select(ForecastEventModel)
+            .order_by(ForecastEventModel.emitted_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return [
+            ForecastEvent(
+                event_id=m.event_id,
+                forecast_id=m.forecast_id,
+                event_type=ForecastEventType(m.event_type),
+                payload=m.payload,
+                emitted_at=m.emitted_at,
+            )
+            for m in result.scalars().all()
+        ]
+
     async def list_since(self, since: datetime) -> list[ForecastEvent]:
         stmt = (
             select(ForecastEventModel)

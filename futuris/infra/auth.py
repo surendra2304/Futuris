@@ -41,8 +41,8 @@ async def get_current_user(
     session: AsyncSession = Depends(get_db_session),
 ) -> AuthUser:
     """FastAPI dependency resolving and verifying the API Key from header."""
-    # Check if auth is disabled in development
-    if getattr(settings, "AUTH_DISABLED", False):
+    # Check if auth enforcement is disabled in development
+    if not getattr(settings, "API_KEYS_ENABLED", True) or getattr(settings, "AUTH_DISABLED", False):
         return AuthUser(label="dev_admin", role="admin")
 
     if not raw_key:
@@ -51,7 +51,18 @@ async def get_current_user(
             detail="Missing X-API-Key authentication header",
         )
 
-    key_hash = hash_api_key(raw_key)
+    # Clean Bearer prefix if passed via header
+    clean_key = (
+        raw_key.replace("Bearer ", "").strip()
+        if raw_key.startswith("Bearer ")
+        else raw_key.strip()
+    )
+
+    # Master API key check (e.g. FUTURIS_API_KEY from environment)
+    if clean_key == settings.FUTURIS_API_KEY:
+        return AuthUser(label="master_admin", role="admin")
+
+    key_hash = hash_api_key(clean_key)
     stmt = select(ApiKeyModel).where(
         ApiKeyModel.key_hash == key_hash,
         ApiKeyModel.revoked_at.is_(None),

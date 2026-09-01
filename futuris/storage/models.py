@@ -1,6 +1,6 @@
 """SQLAlchemy 2.0 ORM database models mapping to domain schemas with JSONB support."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -49,10 +49,10 @@ class ForecastModel(Base):
         ForeignKey("scenarios.scenario_id", ondelete="SET NULL", use_alter=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
     drivers: Mapped[list[dict]] = mapped_column(
@@ -135,8 +135,8 @@ class ForecastEventModel(Base):
     __tablename__ = "forecast_events"
 
     event_id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    forecast_id: Mapped[UUID] = mapped_column(
-        ForeignKey("forecasts.forecast_id", ondelete="CASCADE"), nullable=False, index=True
+    forecast_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("forecasts.forecast_id", ondelete="CASCADE"), nullable=True, index=True
     )
     event_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     payload: Mapped[dict] = mapped_column(
