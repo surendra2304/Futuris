@@ -71,6 +71,10 @@ def forecast(
             lookback_days=lookback_days,
         )
         f = result.forecast
+        async with async_session_factory() as session:
+            f_repo = ForecastRepository(session)
+            await f_repo.create(f)
+            await session.commit()
         typer.echo("==================================================")
         typer.echo(f"Forecast ID:    {f.forecast_id}")
         typer.echo(f"Target:         {f.target}")
