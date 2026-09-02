@@ -50,7 +50,7 @@ const Navigation: React.FC = () => {
 
 export const App: React.FC = () => {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/ui">
       <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
         <Navigation />
         <main>
