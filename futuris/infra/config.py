@@ -79,6 +79,26 @@ class Settings(BaseSettings):
         default="intelx_api",
         description="Live IntelX Intelligence Engine API Key",
     )
+    FUTURIS_FRIDAY_API_KEY: str = Field(
+        default="friday_secret_key_default",
+        description="FRIDAY ecosystem API Key",
+    )
+
+    def validate_production_safety(self) -> None:
+        """Enforce safe_config checks if running under production environment."""
+        from futuris.upgrade.safe_config import production_env_guard
+
+        values = {
+            "FUTURIS_API_KEY": self.FUTURIS_API_KEY,
+            "INFERENCE_API_KEY": self.INFERENCE_API_KEY,
+            "MEMORA_API_KEY": self.MEMORA_API_KEY,
+            "STRATEX_API_KEY": self.STRATEX_API_KEY,
+            "INTELX_API_KEY": self.INTELX_API_KEY,
+            "FUTURIS_FRIDAY_API_KEY": self.FUTURIS_FRIDAY_API_KEY,
+        }
+        production_env_guard(self.APP_ENV, values)
 
 
 settings = Settings()
+if settings.APP_ENV == "prod":
+    settings.validate_production_safety()

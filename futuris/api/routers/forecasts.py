@@ -2,7 +2,7 @@
 
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -21,12 +21,16 @@ from futuris.core.enums import (
     ResolutionMethod,
 )
 from futuris.core.schemas import Driver, EvidenceRef, ForecastEvent, Outcome
+from futuris.infra.auth import AuthUser, RequireAdmin, RequireAnalyst, RequireViewer
 from futuris.scenarios.spec import ScenarioSpec
 from futuris.storage.repositories import (
     EventRepository,
     ForecastRepository,
     OutcomeRepository,
 )
+from futuris.upgrade.compat import _confidence_to_float
+from futuris.upgrade.models import ForecastEnvelope
+from futuris.upgrade.quality import ForecastQualityGate
 
 router = APIRouter(prefix="/v1/forecasts", tags=["Forecasts"])
 
@@ -123,6 +127,7 @@ class ManualResolveRequest(BaseModel):
 async def create_forecast(
     req: ForecastCreateRequest,
     response: Response,
+    user: RequireAnalyst,
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
 ) -> Any:
     """Generate forecast and validate required confidence boundary."""
@@ -137,6 +142,24 @@ async def create_forecast(
         evidence_scope=req.evidence_scope,
     )
     f = forecasts[0]
+
+    # Validate through quality gate
+    gate = ForecastQualityGate()
+    env = ForecastEnvelope(
+        forecast_id=f.forecast_id,
+        target=f.target,
+        as_of=f.as_of,
+        prediction=float(f.prediction),
+        lower=float(f.range_lower),
+        upper=float(f.range_upper),
+        probability=float(f.probability) if f.probability is not None else None,
+        confidence=_confidence_to_float(f.confidence),
+        model_version=str(f.model_version),
+        evidence_ids=[str(e.evidence_id) for e in f.evidence],
+        assumptions=list(f.assumptions),
+        source="forecast_api",
+    )
+    gate.require(env)
 
     # Check Required Confidence Threshold (Abstention Gate)
     if req.required_confidence:
@@ -179,6 +202,7 @@ async def create_forecast(
 @router.get("", response_model=list[ForecastResponse], summary="List and Filter Forecasts")
 async def list_forecasts(
     response: Response,
+    user: RequireViewer,
     target: str | None = Query(None),
     status: ForecastStatus | None = Query(None),
     as_of_after: datetime | None = Query(None),
@@ -229,6 +253,7 @@ async def list_forecasts(
 @router.get("/{forecast_id}", response_model=ForecastResponse, summary="Get Full Forecast Details")
 async def get_forecast(
     forecast_id: UUID,
+    user: RequireViewer,
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
 ) -> ForecastResponse:
     """Retrieve full forecast aggregate root."""
@@ -259,6 +284,7 @@ async def get_forecast(
 async def invalidate_forecast(
     forecast_id: UUID,
     req: InvalidateRequest,
+    user: RequireAdmin,
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
     event_repo: EventRepository = Depends(get_event_repo),
 ) -> ForecastResponse:
@@ -299,6 +325,7 @@ async def invalidate_forecast(
 @router.get("/{forecast_id}/outcome", response_model=Outcome, summary="Get Resolved Outcome")
 async def get_forecast_outcome(
     forecast_id: UUID,
+    user: RequireViewer,
     outcome_repo: OutcomeRepository = Depends(get_outcome_repo),
 ) -> Outcome:
     """Retrieve ground-truth outcome resolution for forecast."""
@@ -321,6 +348,7 @@ async def get_forecast_outcome(
 async def resolve_manual(
     forecast_id: UUID,
     req: ManualResolveRequest,
+    user: RequireAdmin,
     outcome_repo: OutcomeRepository = Depends(get_outcome_repo),
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
     event_repo: EventRepository = Depends(get_event_repo),

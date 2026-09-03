@@ -42,7 +42,8 @@ async def client(api_db_session: AsyncSession) -> AsyncGenerator[httpx.AsyncClie
 
     app.dependency_overrides[get_db_session] = _override_get_db
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
+    headers = {"X-API-Key": "futuris_api"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver", headers=headers) as ac:
         yield ac
     app.dependency_overrides.clear()
 

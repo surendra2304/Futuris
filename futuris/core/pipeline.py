@@ -169,6 +169,8 @@ class ModelingStage:
 
         best_adapter = None
         best_score = float("inf")
+        failed_candidates: dict[str, str] = {}
+        candidate_scores: dict[str, float] = {}
 
         for c in candidates:
             adapter = model_registry.get_adapter(c)
@@ -177,14 +179,24 @@ class ModelingStage:
                 adapter.fit(x_train, y_train, as_of=split_time)
                 pred = adapter.predict(val_steps)
                 mae = float(np.mean(np.abs(np.array(pred.point_forecast) - y_val)))
+                candidate_scores[c] = mae
                 if mae < best_score:
                     best_score = mae
                     best_adapter = adapter
-            except Exception:
+            except Exception as exc:
+                failed_candidates[c] = str(exc)
+                logger.warning("candidate_model_fit_failed", candidate=c, error=str(exc))
                 continue
 
+        is_fallback = False
         if best_adapter is None:
+            is_fallback = True
             best_adapter = model_registry.get_adapter("naive")
+            logger.warning(
+                "all_candidate_models_failed_using_fallback",
+                candidates=candidates,
+                failures=failed_candidates,
+            )
 
         best_adapter.fit(x_df, y_series, as_of=inp.as_of)
         final_prediction = best_adapter.predict(
@@ -193,10 +205,14 @@ class ModelingStage:
             probability_method="empirical",
         )
 
+        model_version_str = model_registry.get_version_string(best_adapter)
+        if is_fallback:
+            model_version_str = f"{model_version_str}:fallback_after_candidate_failures"
+
         return ModelingOutput(
             prediction=final_prediction,
-            model_version=model_registry.get_version_string(best_adapter),
-            best_score=best_score,
+            model_version=model_version_str,
+            best_score=best_score if best_score != float("inf") else 0.0,
             features_df=features_df,
             signal_set=inp.signal_set,
             evidence_ref=evidence_ref,

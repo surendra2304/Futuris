@@ -110,29 +110,29 @@ class LifecycleManager:
                 if broken:
                     continue
 
-            # 2. Check Horizon Resolution (now >= expires_at)
+            # 2. Check Horizon Resolution or Expiry (now >= expires_at)
             if now >= f_expires:
-                outcome = self.resolver.resolve_forecast(forecast, observations_df)
-                saved_outcome = await self.outcome_repo.record_outcome(outcome)
-                recorded_outcomes.append(saved_outcome)
+                try:
+                    outcome = self.resolver.resolve_forecast(forecast, observations_df)
+                    saved_outcome = await self.outcome_repo.record_outcome(outcome)
+                    recorded_outcomes.append(saved_outcome)
 
-                # Emit outcome event
-                event = ForecastEvent(
-                    event_id=uuid4(),
-                    forecast_id=forecast.forecast_id,
-                    event_type=ForecastEventType.FORECAST_OUTCOME_RECORDED,
-                    payload=saved_outcome.model_dump(mode="json"),
-                    emitted_at=datetime.now(UTC),
-                )
-                await self.event_repo.append(event)
-                await self.emitter.emit(event)
-                resolved_count += 1
+                    # Emit outcome event
+                    event = ForecastEvent(
+                        event_id=uuid4(),
+                        forecast_id=forecast.forecast_id,
+                        event_type=ForecastEventType.FORECAST_OUTCOME_RECORDED,
+                        payload=saved_outcome.model_dump(mode="json"),
+                        emitted_at=datetime.now(UTC),
+                    )
+                    await self.event_repo.append(event)
+                    await self.emitter.emit(event)
+                    resolved_count += 1
+                except Exception:
+                    # Ground truth observations unavailable for resolution; transition to EXPIRED
+                    await self.forecast_repo.update_status(forecast.forecast_id, ForecastStatus.EXPIRED)
+                    expired_count += 1
                 continue
-
-            # 3. Check Expiry
-            if now > f_expires:
-                await self.forecast_repo.update_status(forecast.forecast_id, ForecastStatus.EXPIRED)
-                expired_count += 1
 
         review_due = await self.list_due_for_review(now)
 

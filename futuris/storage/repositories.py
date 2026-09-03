@@ -282,6 +282,11 @@ class OutcomeRepository:
     async def get_by_forecast(self, forecast_id: UUID) -> Outcome | None:
         return await self.get_for_forecast(forecast_id)
 
+    async def list_all(self, limit: int = 1000) -> list[Outcome]:
+        stmt = select(OutcomeModel).order_by(OutcomeModel.resolved_at.desc()).limit(limit)
+        result = await self.session.execute(stmt)
+        return [self._to_domain(m) for m in result.scalars().all()]
+
     async def list_unresolved(self, past_horizon: bool = True) -> list[Forecast]:
         now = datetime.now(UTC)
         stmt = (

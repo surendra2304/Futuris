@@ -25,6 +25,8 @@ from futuris.storage.repositories import (
     OutcomeRepository,
 )
 
+from futuris.upgrade.scheduler import DistributedLeaseTable, SafeScheduler, ScheduleSpec
+
 logger = get_logger("futuris.scheduler")
 
 
@@ -52,6 +54,7 @@ class ForecastScheduler:
         pipeline: ForecastingPipeline | None = None,
         agent_runner: AgentRunner | None = None,
         lifecycle_manager: LifecycleManager | None = None,
+        lease_table: DistributedLeaseTable | None = None,
     ) -> None:
         self.scheduler = AsyncIOScheduler()
         self.forecast_repo = forecast_repo
@@ -62,6 +65,7 @@ class ForecastScheduler:
         self.agent_runner = agent_runner or AgentRunner()
         self.lifecycle_manager = lifecycle_manager
         self.drift_monitor = DriftMonitor(event_repo=event_repo)
+        self.safe_scheduler = SafeScheduler(lease_table)
         self.subscriptions: list[ForecastSubscription] = [
             ForecastSubscription(target="service:checkout:capacity_exceedance_24h")
         ]

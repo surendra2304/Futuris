@@ -14,9 +14,12 @@ from futuris.evidence.snapshots import EvidenceSnapshotter
 from futuris.features.contextualize import ContextLayer
 from futuris.features.drivers import DriverAnalyzer
 from futuris.features.normalize import Normalizer
+from futuris.infra.logging import get_logger
 from futuris.models.base import ModelPrediction
 from futuris.models.registry import model_registry
 from futuris.models.routing import ModelRouter, SeriesMetadata
+
+logger = get_logger("futuris.core.engine")
 
 
 class ForecastEngine:
@@ -98,6 +101,7 @@ class ForecastEngine:
         best_adapter = None
         best_score = float("inf")
         candidate_scores: dict[str, float] = {}
+        failed_candidates: dict[str, str] = {}
 
         for candidate_name in candidates:
             adapter = model_registry.get_adapter(candidate_name)
@@ -110,11 +114,20 @@ class ForecastEngine:
                 if mae < best_score:
                     best_score = mae
                     best_adapter = adapter
-            except Exception:
+            except Exception as exc:
+                failed_candidates[candidate_name] = str(exc)
+                logger.warning("candidate_model_fit_failed", candidate=candidate_name, error=str(exc))
                 continue
 
+        is_fallback = False
         if best_adapter is None:
+            is_fallback = True
             best_adapter = model_registry.get_adapter("naive")
+            logger.warning(
+                "all_candidate_models_failed_using_fallback",
+                candidates=candidates,
+                failures=failed_candidates,
+            )
 
         # 7. Refit best adapter on complete historical dataset
         best_adapter.fit(x_df, y_series, as_of=as_of)
@@ -125,6 +138,8 @@ class ForecastEngine:
         )
 
         model_version_str = model_registry.get_version_string(best_adapter)
+        if is_fallback:
+            model_version_str = f"{model_version_str}:fallback_after_candidate_failures"
 
         # 8. Compute Meta-Confidence via ConfidenceAssessor
         confidence_result = self.confidence_assessor.evaluate(

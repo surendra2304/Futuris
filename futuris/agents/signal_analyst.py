@@ -61,6 +61,7 @@ class SignalAnalyst:
         signal_set: TrustedSignalSet,
         evidence_id: UUID | None = None,
         task_context: dict | None = None,
+        allow_llm: bool = True,
     ) -> AgentMessage:
         """Evaluate normalized signal set and produce structured AgentMessage."""
         df = signal_set.to_dataframe()
@@ -72,7 +73,7 @@ class SignalAnalyst:
             res, narr, _ = self._deterministic_fallback(series, report)
             return narr
 
-        if self.llm.is_available:
+        if self.llm.is_available and allow_llm:
             prompt = (
                 f"Analyze telemetry series {series.name}: mean={series.mean():.2f}, "
                 f"latest={series.iloc[-1]:.2f}, coverage={report.coverage_percentage}%. "
@@ -82,6 +83,7 @@ class SignalAnalyst:
                 prompt=prompt,
                 system_prompt="You are a principal SRE and telemetry signal analyst.",
                 fallback_fn=fallback_wrapper,
+                allow_llm=allow_llm,
             )
             result_dict, _, conf = self._deterministic_fallback(series, report)
         else:

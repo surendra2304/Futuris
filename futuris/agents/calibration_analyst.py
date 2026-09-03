@@ -64,6 +64,7 @@ class CalibrationAnalyst:
         report: BacktestReport,
         drift_status: DriftStatus | None = None,
         task_context: dict | None = None,
+        allow_llm: bool = True,
     ) -> AgentMessage:
         """Generate a structured briefing and persist in local analyst history."""
 
@@ -71,7 +72,7 @@ class CalibrationAnalyst:
             _, narr, _ = self._deterministic_fallback(report, drift_status)
             return narr
 
-        if self.llm.is_available:
+        if self.llm.is_available and allow_llm:
             first_model = (
                 list(report.metrics_by_model.values())[0] if report.metrics_by_model else {}
             )
@@ -85,6 +86,7 @@ class CalibrationAnalyst:
                 prompt=prompt,
                 system_prompt="You are a senior statistical forecasting governance officer.",
                 fallback_fn=fallback_wrapper,
+                allow_llm=allow_llm,
             )
             result_dict, _, conf = self._deterministic_fallback(report, drift_status)
         else:

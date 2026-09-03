@@ -54,6 +54,8 @@ class LLMAdapter:
         prompt: str,
         system_prompt: str = "",
         fallback_fn: Any | None = None,
+        *,
+        allow_llm: bool = True,
     ) -> str:
         """Generate LLM completion with prompt caching and deterministic fallback on failure."""
         cached = self.cache.get(prompt, system_prompt)
@@ -62,7 +64,7 @@ class LLMAdapter:
             logger.info("llm_cache_hit", prompt_hash=p_hash)
             return cached
 
-        if not self.is_available:
+        if not allow_llm or not self.is_available:
             logger.warning(
                 "llm_provider_unavailable",
                 provider=self.provider,

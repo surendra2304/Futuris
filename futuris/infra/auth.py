@@ -22,6 +22,10 @@ class AuthUser(BaseModel):
 
     label: str
     role: str  # viewer | analyst | admin
+    principal_id: str = "principal_default"
+    tenant_id: str = "tenant_default"
+    scopes: list[str] = []
+    credential_id: str | None = None
 
 
 def hash_api_key(plain_key: str) -> str:
@@ -43,7 +47,13 @@ async def get_current_user(
     """FastAPI dependency resolving and verifying the API Key from header."""
     # Check if auth enforcement is disabled in development
     if not getattr(settings, "API_KEYS_ENABLED", True) or getattr(settings, "AUTH_DISABLED", False):
-        return AuthUser(label="dev_admin", role="admin")
+        return AuthUser(
+            label="dev_admin",
+            role="admin",
+            principal_id="principal_dev",
+            tenant_id="tenant_dev",
+            scopes=["*"],
+        )
 
     if not raw_key:
         raise HTTPException(
@@ -60,7 +70,13 @@ async def get_current_user(
 
     # Master API key check (e.g. FUTURIS_API_KEY from environment)
     if clean_key == settings.FUTURIS_API_KEY:
-        return AuthUser(label="master_admin", role="admin")
+        return AuthUser(
+            label="master_admin",
+            role="admin",
+            principal_id="principal_master",
+            tenant_id="tenant_master",
+            scopes=["*"],
+        )
 
     key_hash = hash_api_key(clean_key)
     stmt = select(ApiKeyModel).where(
@@ -76,27 +92,46 @@ async def get_current_user(
             detail="Invalid or revoked API Key",
         )
 
-    return AuthUser(label=record.label, role=record.role)
+    return AuthUser(
+        label=record.label,
+        role=record.role,
+        principal_id=f"principal_{record.label}",
+        tenant_id=getattr(record, "tenant_id", "tenant_default"),
+        scopes=[record.role],
+        credential_id=record.key_hash[:16],
+    )
 
 
-def require_role(min_role: str):
-    """Dependency factory enforcing minimum required role hierarchy."""
+async def require_viewer(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUser:
     role_hierarchy = {"viewer": 1, "analyst": 2, "admin": 3}
-
-    async def _role_checker(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUser:
-        user_weight = role_hierarchy.get(user.role, 0)
-        req_weight = role_hierarchy.get(min_role, 0)
-
-        if user_weight < req_weight:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Insufficient permissions: requires minimum role '{min_role}'",
-            )
-        return user
-
-    return _role_checker
+    if role_hierarchy.get(user.role, 0) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions: requires minimum role 'viewer'",
+        )
+    return user
 
 
-RequireViewer = Annotated[AuthUser, Depends(require_role("viewer"))]
-RequireAnalyst = Annotated[AuthUser, Depends(require_role("analyst"))]
-RequireAdmin = Annotated[AuthUser, Depends(require_role("admin"))]
+async def require_analyst(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUser:
+    role_hierarchy = {"viewer": 1, "analyst": 2, "admin": 3}
+    if role_hierarchy.get(user.role, 0) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions: requires minimum role 'analyst'",
+        )
+    return user
+
+
+async def require_admin(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUser:
+    role_hierarchy = {"viewer": 1, "analyst": 2, "admin": 3}
+    if role_hierarchy.get(user.role, 0) < 3:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions: requires minimum role 'admin'",
+        )
+    return user
+
+
+RequireViewer = Annotated[AuthUser, Depends(require_viewer)]
+RequireAnalyst = Annotated[AuthUser, Depends(require_analyst)]
+RequireAdmin = Annotated[AuthUser, Depends(require_admin)]

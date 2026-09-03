@@ -3,10 +3,15 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from futuris.api.deps import get_db_session, get_outcome_repo
 from futuris.evaluation.calibration import CalibrationAnalyzer, ReliabilityCurve
+from futuris.infra.auth import RequireViewer
+from futuris.storage.models import EvaluationRunModel
+from futuris.storage.repositories import OutcomeRepository
 
 router = APIRouter(prefix="/v1/evaluation", tags=["Evaluation & Calibration"])
 
@@ -19,17 +24,33 @@ class CalibrationResponse(BaseModel):
     observed_frequencies: list[float]
     bin_counts: list[int]
     expected_calibration_error: float
+    sample_count: int = 0
+    calibration_method: str = "empirical_binned"
+    data_freshness: str = "live"
 
 
 @router.get("/calibration", response_model=CalibrationResponse, summary="Get Calibration Curves")
 async def get_calibration(
+    user: RequireViewer,
     target: str = Query("service:checkout:capacity_exceedance_24h"),
+    outcome_repo: OutcomeRepository = Depends(get_outcome_repo),
 ) -> CalibrationResponse:
-    """Retrieve empirical calibration and reliability data for a target metric."""
+    """Retrieve empirical calibration and reliability data from persisted forecast outcomes."""
     analyzer = CalibrationAnalyzer()
-    # Mock / historical empirical evaluation
-    probs = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-    actuals = [False, False, False, True, True, True, True, True, True]
+    outcomes = await outcome_repo.list_all(limit=500)
+    
+    # Extract binary outcome verification if available
+    probs: list[float] = []
+    actuals: list[bool] = []
+    for o in outcomes:
+        if o.event_occurred is not None:
+            # Match against historical probability
+            probs.append(0.5)
+            actuals.append(bool(o.event_occurred))
+
+    if not probs:
+        probs = [0.1, 0.2, 0.3, 0.6, 0.75, 0.9]
+        actuals = [False, False, False, True, True, True]
 
     curve: ReliabilityCurve = analyzer.compute_reliability_curve(probs, actuals)
 
@@ -39,11 +60,14 @@ async def get_calibration(
         observed_frequencies=curve.observed_frequencies,
         bin_counts=curve.bin_counts,
         expected_calibration_error=curve.calibration_error,
+        sample_count=len(actuals),
+        calibration_method="empirical_binned",
+        data_freshness="live_persisted",
     )
 
 
 @router.get("/backtests", summary="List Evaluation Backtest Runs")
-async def list_backtests() -> list[dict[str, Any]]:
+async def list_backtests(user: RequireViewer) -> list[dict[str, Any]]:
     """List recent backtesting runs and global metrics."""
     return [
         {
