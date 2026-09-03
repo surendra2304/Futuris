@@ -272,7 +272,17 @@ class MeanEnsembleAdapter:
         self.as_of = as_of
         self.ets_adapter.fit(x, y, as_of)
         self.snaive_adapter.fit(x, y, as_of)
-        self.residuals = 0.5 * (self.ets_adapter.residuals + self.snaive_adapter.residuals)
+        r_ets = self.ets_adapter.residuals
+        r_snaive = self.snaive_adapter.residuals
+        if len(r_ets) > 0 and len(r_snaive) > 0:
+            min_len = min(len(r_ets), len(r_snaive))
+            self.residuals = 0.5 * (r_ets[-min_len:] + r_snaive[-min_len:])
+        elif len(r_ets) > 0:
+            self.residuals = r_ets
+        elif len(r_snaive) > 0:
+            self.residuals = r_snaive
+        else:
+            self.residuals = np.array([])
         return self
 
     def predict(
