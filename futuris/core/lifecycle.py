@@ -72,6 +72,41 @@ class LifecycleManager:
         await self.emitter.emit(event)
         return updated or forecast
 
+    async def resolve_manual(
+        self,
+        forecast_id: uuid4,
+        observed_value: float,
+        event_occurred: bool,
+        note: str = "",
+    ) -> Outcome:
+        """Resolve a forecast outcome manually with human observation."""
+        from futuris.core.enums import ResolutionMethod
+        f = await self.forecast_repo.get(forecast_id)
+        if not f:
+            raise ValueError(f"Forecast {forecast_id} not found")
+
+        outcome = Outcome(
+            outcome_id=uuid4(),
+            forecast_id=forecast_id,
+            observed_value=observed_value,
+            event_occurred=event_occurred,
+            resolved_at=datetime.now(UTC),
+            resolution_method=ResolutionMethod.HUMAN,
+            ambiguity_note=note,
+            resolution_rule_version="manual:human:v1",
+        )
+        saved_outcome = await self.outcome_repo.record_outcome(outcome)
+        event = ForecastEvent(
+            event_id=uuid4(),
+            forecast_id=forecast_id,
+            event_type=ForecastEventType.FORECAST_OUTCOME_RECORDED,
+            payload=saved_outcome.model_dump(mode="json"),
+            emitted_at=datetime.now(UTC),
+        )
+        await self.event_repo.append(event)
+        await self.emitter.emit(event)
+        return saved_outcome
+
     async def run_lifecycle_sweep(
         self,
         observations_df: pd.DataFrame,

@@ -57,3 +57,11 @@ Comprehensive chronological engineering log, architectural evolution, and daily 
 - **💡 What I Accomplished**: Integrated the `futuris/upgrade` subsystem into the active runtime, hardened all `/v1/forecasts` routes with RBAC dependencies, integrated `InMemoryRateLimitBackend`, refactored `AgentRunner` to be concurrency-safe, fixed unreachable lifecycle expiry branches, and created typed `EcosystemAdapter` interfaces for FRIDAY, Memora, Inference, IntelX, and Sentinel.
 - **🛡️ Fixes & Hardening**: Fixed silent candidate model failure swallowing, resolved Windows SQLite file locking in `DurableStateStore`, removed default hardcoded secrets in production mode, and enforced `ForecastQualityGate` on all generated predictions.
 - **📊 Test Results**: **41 upgrade tests + full core suite passed** (100% green pass rate).
+
+---
+
+### 📈 [Day 8 — 2026-09-04: Full 13-Subsystem End-to-End System Test & Quality Gate Verification](diary/2026-09-04.md)
+- **🎯 Focus**: Comprehensive 13-subsystem end-to-end integration verification, multi-model execution, ForecastQualityGate enforcement, Advisory Decision Support, scenario divergence comparisons, manual outcome lifecycle sweeps, empirical calibration scoring, and REST API/FRIDAY delegation contracts.
+- **💡 What I Accomplished**: Implemented and executed `scripts/e2e_system_test.py`, verifying schema init, point-in-time monotonicity, feature contextualization (36 features), multi-model fitting, core pipeline forecasting, quality gate invariants, decision support guardrails (`Prediction != Authorization`), scenario engine divergence ranking, ORM database persistence, lifecycle resolution sweeps, calibration analytics (Brier & ECE), distributed lease mutual exclusion, and complete REST API endpoints with RBAC.
+- **🛡️ Fixes & Hardening**: Enabled `API_KEYS_ENABLED=true` in local `.env` to enforce 401 unauthorized rejections on protected routes, aligned FRIDAY delegation request payloads, added classmethod ergonomics to `ForecastQualityGate`, and implemented convenience query methods on repositories and lifecycle manager.
+- **📊 Test Results**: **13/13 subsystems passed** (100% green pass rate).

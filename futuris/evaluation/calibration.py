@@ -74,6 +74,33 @@ class CalibrationAnalyzer:
             calibration_error=round(float(ece), 4),
         )
 
+    def compute_calibration_curve(
+        self,
+        predicted_probs: list[float],
+        actual_outcomes: list[bool] | list[int],
+    ) -> list[tuple[float, float, int]]:
+        curve = self.compute_reliability_curve(predicted_probs, [bool(a) for a in actual_outcomes])
+        return list(zip(curve.bin_centers, curve.observed_frequencies, curve.bin_counts, strict=False))
+
+    def compute_brier_score(
+        self,
+        predicted_probs: list[float],
+        actual_outcomes: list[bool] | list[int],
+    ) -> float:
+        y_prob = np.asarray(predicted_probs, dtype=float)
+        y_true = np.asarray(actual_outcomes, dtype=float)
+        if len(y_prob) == 0:
+            return 0.0
+        return float(np.mean((y_prob - y_true) ** 2))
+
+    def compute_expected_calibration_error(
+        self,
+        predicted_probs: list[float],
+        actual_outcomes: list[bool] | list[int],
+    ) -> float:
+        curve = self.compute_reliability_curve(predicted_probs, [bool(a) for a in actual_outcomes])
+        return curve.expected_calibration_error
+
     def apply_hierarchical_shrinkage(
         self,
         n_target: int,

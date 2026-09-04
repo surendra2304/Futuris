@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import isfinite
-from typing import Iterable
+from typing import Any, Iterable
+from uuid import uuid4
 
 from .models import ForecastEnvelope
 
@@ -48,11 +49,35 @@ class ForecastQualityGate:
         report.passed = not report.errors
         return report
 
-    def require(self, forecast: ForecastEnvelope) -> None:
-        report = self.evaluate(forecast)
-        if not report.passed:
-            details = "; ".join(issue.message for issue in report.errors)
+    @classmethod
+    def require(cls, forecast: Any) -> None:
+        passed, errors = cls.validate_forecast(forecast)
+        if not passed:
+            details = "; ".join(errors)
             raise ValueError(details)
+
+    @classmethod
+    def validate_forecast(cls, forecast: Any) -> tuple[bool, list[str]]:
+        gate = cls()
+        if not isinstance(forecast, ForecastEnvelope):
+            conf_val = getattr(getattr(forecast, "confidence", None), "value", forecast)
+            conf_num = 0.85 if conf_val == "high" else (0.65 if conf_val == "medium" else 0.45)
+            env = ForecastEnvelope(
+                forecast_id=getattr(forecast, "forecast_id", uuid4()),
+                target=getattr(forecast, "target", ""),
+                prediction=getattr(forecast, "prediction", 0.0),
+                lower=getattr(forecast, "range_lower", 0.0),
+                upper=getattr(forecast, "range_upper", 0.0),
+                probability=getattr(forecast, "probability", None),
+                confidence=conf_num,
+                model_version=getattr(forecast, "model_version", "m1"),
+                evidence_ids=[str(getattr(e, "evidence_id", e)) for e in getattr(forecast, "evidence", [])],
+            )
+        else:
+            env = forecast
+        rep = gate.evaluate(env)
+        return rep.passed, [i.message for i in rep.errors]
+
 
 
 def coverage_score(required: Iterable[str], observed: Iterable[str]) -> float:

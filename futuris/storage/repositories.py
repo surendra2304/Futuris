@@ -157,6 +157,11 @@ class ForecastRepository:
         model = result.scalar_one_or_none()
         return self._to_domain(model) if model else None
 
+    async def get_by_id(self, forecast_id: UUID) -> Forecast | None:
+        """Alias for get(forecast_id)."""
+        return await self.get(forecast_id)
+
+
     async def list_by_target(
         self, target: str, as_of_range: tuple[datetime, datetime] | None = None
     ) -> list[Forecast]:

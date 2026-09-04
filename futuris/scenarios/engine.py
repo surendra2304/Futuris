@@ -1,5 +1,6 @@
 """ScenarioEngine: Perturbations, sensitivity attribution, and comparison."""
 
+from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -155,3 +156,41 @@ class ScenarioEngine:
             divergence_ranking=divergences,
             top_drivers=top_drivers_set,
         )
+
+    def evaluate_scenarios(
+        self,
+        base_forecast: Forecast,
+        specs: list[ScenarioSpec],
+        features_df: Any = None,
+    ) -> list[ScenarioResult]:
+        """Synchronously evaluate multiple scenarios with linear propagation."""
+        base_demand = float(base_forecast.prediction)
+        results = []
+        for spec in specs:
+            graph = DependencyGraph.default_ops_wedge(base_demand=base_demand)
+            perturbed = graph.propagate_linear(spec.assumption_overrides)
+            res = ScenarioResult(
+                spec=spec,
+                parent_forecast_id=base_forecast.forecast_id,
+                perturbed_values=perturbed,
+            )
+            results.append(res)
+        return results
+
+    def compare_scenarios(self, results: list[ScenarioResult]) -> dict[str, Any]:
+        """Convenience comparison dict returning variable matrix and divergence ranking."""
+        if not results:
+            return {"variable_matrix": {}, "divergence_ranking": []}
+        all_variables = list(results[0].perturbed_values.keys())
+        matrix = {v: {r.spec.name: r.perturbed_values.get(v, 0.0) for r in results} for v in all_variables}
+        divergences = []
+        for v in all_variables:
+            values = [r.perturbed_values.get(v, 0.0) for r in results]
+            if values:
+                min_v, max_v = min(values), max(values)
+                mean_v = sum(values) / len(values)
+                div_pct = ((max_v - min_v) / (mean_v + 1e-5)) * 100.0
+                divergences.append((v, round(div_pct, 2)))
+        divergences.sort(key=lambda x: x[1], reverse=True)
+        return {"variable_matrix": matrix, "divergence_ranking": divergences}
+
