@@ -5,12 +5,14 @@ import { ForecastDetailPage } from './pages/ForecastDetailPage';
 import { CalibrationPage } from './pages/CalibrationPage';
 import { OutcomesPage } from './pages/OutcomesPage';
 import { SubscriptionsPage } from './pages/SubscriptionsPage';
-import { Layers, Activity, CheckSquare, Bell } from 'lucide-react';
+import { EcosystemPage } from './pages/EcosystemPage';
+import { Layers, Activity, CheckSquare, Bell, Radio } from 'lucide-react';
 
 const Navigation: React.FC = () => {
   const location = useLocation();
   const navItems = [
     { path: '/', label: 'Forecasts', icon: Layers },
+    { path: '/ecosystem', label: 'Ecosystem', icon: Radio },
     { path: '/calibration', label: 'Calibration', icon: Activity },
     { path: '/outcomes', label: 'Outcomes', icon: CheckSquare },
     { path: '/subscriptions', label: 'Subscriptions', icon: Bell },
@@ -57,6 +59,7 @@ export const App: React.FC = () => {
           <Routes>
             <Route path="/" element={<ForecastListPage />} />
             <Route path="/forecasts/:id" element={<ForecastDetailPage />} />
+            <Route path="/ecosystem" element={<EcosystemPage />} />
             <Route path="/calibration" element={<CalibrationPage />} />
             <Route path="/outcomes" element={<OutcomesPage />} />
             <Route path="/subscriptions" element={<SubscriptionsPage />} />

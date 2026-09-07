@@ -80,3 +80,20 @@ export interface ForecastSubscription {
   delta_pred_threshold: number;
   enabled: boolean;
 }
+
+export interface PeerAgent {
+  name: string;
+  url: string;
+  role: string;
+  status: 'online' | 'degraded' | 'offline';
+  latency_ms: number | null;
+  last_interaction: string;
+  capabilities: string[];
+}
+
+export interface EcosystemOverview {
+  peers: PeerAgent[];
+  total_online: number;
+  total_peers: number;
+  timestamp: string;
+}

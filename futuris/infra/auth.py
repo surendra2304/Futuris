@@ -56,9 +56,13 @@ async def get_current_user(
         )
 
     if not raw_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing X-API-Key authentication header",
+        # Unauthenticated calls (e.g. public dashboard or browser UI) default to read-only viewer role
+        return AuthUser(
+            label="public_viewer",
+            role="viewer",
+            principal_id="principal_public_viewer",
+            tenant_id="tenant_public",
+            scopes=["viewer"],
         )
 
     # Clean Bearer prefix if passed via header

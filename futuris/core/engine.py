@@ -17,6 +17,9 @@ from futuris.features.normalize import Normalizer
 from futuris.infra.logging import get_logger
 from futuris.models.base import ModelPrediction
 from futuris.models.registry import model_registry
+from futuris.connectors.intelx_context import IntelXContextInjector
+from futuris.infra.config import settings
+from futuris.models.ai_universe_enhanced import AIUniverseModelEnhancer
 from futuris.models.routing import ModelRouter, SeriesMetadata
 
 logger = get_logger("futuris.core.engine")
@@ -34,6 +37,8 @@ class ForecastEngine:
         router: ModelRouter | None = None,
         assessor: ConfidenceAssessor | None = None,
         driver_analyzer: DriverAnalyzer | None = None,
+        intelx_injector: IntelXContextInjector | None = None,
+        enhancer: AIUniverseModelEnhancer | None = None,
     ) -> None:
         self.connector = connector or SyntheticTelemetryConnector(seed=42)
         self.snapshotter = snapshotter or EvidenceSnapshotter()
@@ -42,6 +47,11 @@ class ForecastEngine:
         self.router = router or ModelRouter()
         self.confidence_assessor = assessor or confidence_assessor
         self.driver_analyzer = driver_analyzer or DriverAnalyzer()
+        self.intelx_injector = intelx_injector or IntelXContextInjector(
+            base_url=settings.INTELX_URL,
+            api_key=settings.INTELX_API_KEY,
+        )
+        self.enhancer = enhancer or AIUniverseModelEnhancer()
 
     async def orchestrate(
         self,
@@ -76,6 +86,19 @@ class ForecastEngine:
             source_id=evidence_scope,
             signal_class=SignalClass.TELEMETRY,
         )
+
+        # 4.1 Ingest qualitative exogenous research from IntelX
+        intelx_reports = []
+        exogenous_adj = {
+            "sentiment_multiplier": 1.0,
+            "volatility_multiplier": 1.0,
+            "confidence_penalty": 0.0,
+        }
+        try:
+            intelx_reports = await self.intelx_injector.fetch_recent_research(target, as_of=as_of)
+            exogenous_adj = self.intelx_injector.compute_exogenous_adjustments(intelx_reports)
+        except Exception as exc:
+            logger.warning("intelx_context_injection_skipped", target=target, error=str(exc))
 
         # 5. Route candidate models
         step_minutes = signal_set.grid_step_minutes
@@ -141,6 +164,14 @@ class ForecastEngine:
         if is_fallback:
             model_version_str = f"{model_version_str}:fallback_after_candidate_failures"
 
+        # 7.1 Enhance uncertainty intervals with IntelX qualitative research
+        enhanced_ctx = self.enhancer.enhance_forecast(
+            base_prediction=final_prediction.central_estimate,
+            range_lower=final_prediction.range_lower,
+            range_upper=final_prediction.range_upper,
+            context_factors=exogenous_adj,
+        )
+
         # 8. Compute Meta-Confidence via ConfidenceAssessor
         confidence_result = self.confidence_assessor.evaluate(
             historical_resolved_count=historical_resolved_count,
@@ -169,9 +200,31 @@ class ForecastEngine:
                 )
             ]
 
+        # 9.1 Inject IntelX Exogenous Research Driver if available
+        if intelx_reports and intelx_reports[0].key_findings:
+            top_finding = intelx_reports[0].key_findings[0]
+            sentiment_positive = exogenous_adj.get("sentiment_multiplier", 1.0) >= 1.0
+            drivers.append(
+                Driver(
+                    name=f"intelx:{top_finding[:28]}",
+                    direction="positive" if sentiment_positive else "negative",
+                    strength=min(0.95, round(exogenous_adj.get("volatility_multiplier", 1.0) * 0.70, 2)),
+                    leading_or_lagging="leading",
+                    evidence_refs=[evidence_ref.evidence_id],
+                )
+            )
+
         # 10. Assemble Forecast Domain Object
         expires_at = as_of + horizon
         review_at = as_of + (horizon / 4)
+
+        assumptions_list = [
+            "traffic regime stable",
+            "service architecture unchanged",
+            enhanced_ctx.qualitative_nuance,
+        ]
+        if enhanced_ctx.risk_factors:
+            assumptions_list.extend(enhanced_ctx.risk_factors)
 
         forecast = Forecast(
             forecast_id=forecast_id,
@@ -180,14 +233,14 @@ class ForecastEngine:
             horizon=horizon,
             expires_at=expires_at,
             prediction=final_prediction.central_estimate,
-            range_lower=final_prediction.range_lower,
-            range_upper=final_prediction.range_upper,
+            range_lower=enhanced_ctx.adjusted_lower_bound,
+            range_upper=enhanced_ctx.adjusted_upper_bound,
             probability=final_prediction.exceedance_probability,
             confidence=confidence_result.level,
             drivers=drivers,
             evidence=[evidence_ref],
             model_version=model_version_str,
-            assumptions=["traffic regime stable", "service architecture unchanged"],
+            assumptions=assumptions_list,
             review_at=review_at,
             status=ForecastStatus.DRAFT,
             scenario_id=None,

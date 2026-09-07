@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchForecasts } from '../api/client';
+import { fetchForecasts, triggerForecast, triggerDemoSeed } from '../api/client';
 import { Forecast, ConfidenceLevel } from '../api/types';
-import { HelpCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { HelpCircle, AlertCircle, RefreshCw, Zap, Sparkles } from 'lucide-react';
 
 export const ForecastListPage: React.FC = () => {
   const [forecasts, setForecasts] = useState<Forecast[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('');
+  const [generating, setGenerating] = useState<boolean>(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -20,6 +21,32 @@ export const ForecastListPage: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to load forecasts');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleQuickForecast = async () => {
+    setGenerating(true);
+    setError(null);
+    try {
+      await triggerForecast('service:checkout:capacity_exceedance_24h', '24h');
+      await loadData();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to generate forecast');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleQuickSeed = async () => {
+    setGenerating(true);
+    setError(null);
+    try {
+      await triggerDemoSeed();
+      await loadData();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to seed workspace');
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -94,8 +121,31 @@ export const ForecastListPage: React.FC = () => {
       {loading ? (
         <div className="p-12 text-center text-slate-400 font-mono text-sm">Loading active forecasts...</div>
       ) : forecasts.length === 0 ? (
-        <div className="p-12 text-center bg-white border border-dashed border-slate-300 rounded-lg text-slate-500">
-          No forecasts found matching criteria.
+        <div className="p-12 text-center bg-white border border-dashed border-slate-300 rounded-lg text-slate-500 space-y-4">
+          <div className="max-w-md mx-auto space-y-1">
+            <h3 className="text-base font-semibold text-slate-800">No active forecasts found</h3>
+            <p className="text-xs text-slate-500">
+              The operational forecasting database has not recorded active projections for this filter yet.
+            </p>
+          </div>
+          <div className="flex justify-center items-center gap-3">
+            <button
+              onClick={handleQuickForecast}
+              disabled={generating}
+              className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-xs font-semibold shadow-sm disabled:opacity-50"
+            >
+              <Zap className={`w-3.5 h-3.5 ${generating ? 'animate-bounce' : ''}`} />
+              <span>{generating ? 'Orchestrating...' : 'Generate Checkout Forecast'}</span>
+            </button>
+            <button
+              onClick={handleQuickSeed}
+              disabled={generating}
+              className="flex items-center space-x-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-md text-xs font-semibold disabled:opacity-50"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+              <span>{generating ? 'Seeding...' : 'Seed 180-Day Benchmark'}</span>
+            </button>
+          </div>
         </div>
       ) : (
         <div className="overflow-x-auto bg-white border border-slate-200 rounded-lg shadow-sm">
