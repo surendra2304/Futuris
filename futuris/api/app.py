@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -118,8 +119,10 @@ async def get_metrics() -> Response:
 
 
 @app.api_route("/", methods=["GET", "HEAD"], tags=["Root"])
-async def root() -> dict[str, Any]:
-    """Root endpoint for UptimeRobot / uptime probes."""
+async def root(request: Request) -> Any:
+    """Root endpoint for UptimeRobot / uptime probes. Redirects browsers to UI."""
+    if "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse(url="/ui")
     return {
         "status": "ok",
         "service": "FUTURIS",
