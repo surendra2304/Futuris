@@ -116,10 +116,29 @@ app.include_router(predictions_router, prefix="/api")
 app.include_router(webhooks_router, prefix="/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 
+from starlette.exceptions import HTTPException
+from starlette.types import Scope
+
+
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles that falls back to index.html for Single Page Applications (SPA)."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            response = await super().get_response(path, scope)
+            if response.status_code == 404 and not path.startswith("assets/"):
+                return await super().get_response("index.html", scope)
+            return response
+        except (HTTPException, Exception):
+            if not path.startswith("assets/"):
+                return await super().get_response("index.html", scope)
+            raise
+
+
 # 4. Mount Production UI Build Output if available
 ui_dist_path = Path(__file__).parent.parent / "ui" / "dist"
 if ui_dist_path.exists():
-    app.mount("/ui", StaticFiles(directory=str(ui_dist_path), html=True), name="ui")
+    app.mount("/ui", SPAStaticFiles(directory=str(ui_dist_path), html=True), name="ui")
 
 
 @app.get("/metrics", tags=["Observability"])
@@ -132,7 +151,7 @@ async def get_metrics() -> Response:
 async def root(request: Request) -> Any:
     """Root endpoint for UptimeRobot / uptime probes. Redirects browsers to UI."""
     if "text/html" in request.headers.get("accept", ""):
-        return RedirectResponse(url="/ui")
+        return RedirectResponse(url="/ui/")
     return {
         "status": "ok",
         "service": "FUTURIS",
