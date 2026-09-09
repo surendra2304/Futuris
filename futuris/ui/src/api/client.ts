@@ -94,3 +94,17 @@ export async function triggerDemoSeed(): Promise<{ status: string; message: stri
   });
   return handleResponse<{ status: string; message: string }>(res, 'Failed to trigger seed');
 }
+
+export async function triggerMarketForecast(symbol: string = 'BTCUSDT'): Promise<any> {
+  const res = await fetch(`/v1/futuris/forecast`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      symbol,
+      horizons: ['24h'],
+      include_intelx: true,
+      include_inference: true,
+    }),
+  });
+  return handleResponse<any>(res, `Failed to generate market forecast for ${symbol}`);
+}

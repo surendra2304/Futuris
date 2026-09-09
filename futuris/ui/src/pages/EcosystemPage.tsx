@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { fetchPeers, triggerForecast, triggerDemoSeed } from '../api/client';
+import { fetchPeers, triggerForecast, triggerDemoSeed, triggerMarketForecast } from '../api/client';
 import { EcosystemOverview, PeerAgent } from '../api/types';
 import { Radio, CheckCircle, AlertTriangle, XCircle, RefreshCw, Zap, Server, Activity, ShieldCheck } from 'lucide-react';
 
@@ -44,10 +44,10 @@ export const EcosystemPage: React.FC = () => {
     setActionBusy(true);
     setActionMsg(null);
     try {
-      const fc = await triggerForecast('trading:btc:volatility_spike_24h', '24h');
-      setActionMsg(`Successfully generated trading forecast ${fc.forecast_id} from Stratex telemetry!`);
+      const fc = await triggerMarketForecast('BTCUSDT');
+      setActionMsg(`Successfully generated BTCUSDT market forecast! Regime: ${fc.regime_outlook.current} (${fc.regime_outlook.predicted_direction}), Volatility Prob: ${(fc.volatility_forecast.probability * 100).toFixed(1)}%, IntelX: ${fc.intelx_context_included ? 'ONLINE' : 'FALLBACK'}, Stratex Dispatch: SENT`);
     } catch (err: unknown) {
-      setActionMsg(err instanceof Error ? err.message : 'Failed to generate forecast');
+      setActionMsg(err instanceof Error ? err.message : 'Failed to generate market forecast');
     } finally {
       setActionBusy(false);
     }

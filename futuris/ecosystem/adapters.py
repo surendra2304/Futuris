@@ -150,6 +150,44 @@ class EcosystemAdapter:
             logger.warning("memora_publish_failed", error=str(exc))
             return False
 
+    async def publish_market_forecast_to_memora(
+        self,
+        symbol: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Publish market volatility forecast to Memora under futuris/forecasts/market namespace."""
+        candidate = MemoraMemoryCandidate(
+            candidate_id=str(uuid4()),
+            topic=f"market:{symbol}:volatility",
+            content=content,
+            metadata=metadata or {},
+            recorded_at=datetime.now(UTC),
+        )
+        return await self.publish_memora_candidate(candidate)
+
+    async def dispatch_market_forecast_to_stratex(
+        self,
+        symbol: str,
+        forecast_payload: dict[str, Any],
+    ) -> bool:
+        """Dispatch freshly computed market forecast to Stratex trading bot."""
+        url = f"{settings.STRATEX_URL.rstrip('/')}/api/v1/futuris/forecast"
+        headers = {
+            "Authorization": f"Bearer {settings.STRATEX_API_KEY}",
+            "X-API-Key": settings.STRATEX_API_KEY,
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(url, json=forecast_payload, headers=headers)
+                if resp.status_code in {200, 201, 202}:
+                    logger.info("stratex_market_forecast_dispatched", symbol=symbol, status=resp.status_code)
+                    return True
+        except Exception as exc:
+            logger.debug("stratex_market_forecast_dispatch_skipped", symbol=symbol, error=str(exc))
+        return False
+
     async def emit_sentinel_event(self, event: SentinelGovernanceEvent) -> bool:
         """Emit security/governance audit event to Sentinel service."""
         logger.info(

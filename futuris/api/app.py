@@ -20,8 +20,10 @@ from futuris.api.routers.evaluation import router as evaluation_router
 from futuris.api.routers.events import router as events_router
 from futuris.api.routers.forecasts import router as forecasts_router
 from futuris.api.routers.friday import router as friday_router
+from futuris.api.routers.market import router as market_router
 from futuris.api.routers.models import router as models_router
 from futuris.api.routers.scenarios import router as scenarios_router
+from futuris.api.routers.webhooks import router as webhooks_router
 from futuris.demo.seed import DemoSeeder
 from futuris.infra.logging import configure_logging, get_logger
 from futuris.infra.metrics import metrics_endpoint
@@ -105,6 +107,11 @@ app.include_router(models_router)
 app.include_router(audit_router)
 app.include_router(friday_router)
 app.include_router(ecosystem_router)
+app.include_router(market_router, prefix="/v1/futuris")
+app.include_router(market_router, prefix="/api/v1/futuris")
+app.include_router(market_router, prefix="/v1/market")
+app.include_router(webhooks_router, prefix="/v1")
+app.include_router(webhooks_router, prefix="/api/v1")
 
 # 4. Mount Production UI Build Output if available
 ui_dist_path = Path(__file__).parent.parent / "ui" / "dist"
