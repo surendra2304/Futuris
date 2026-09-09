@@ -37,10 +37,10 @@ RUN mkdir -p /app/data /app/data/storage
 
 COPY --from=builder /build/futuris /app/futuris
 
-EXPOSE 8000
+EXPOSE 8000 10000
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD sh -c 'curl -f "http://127.0.0.1:${PORT:-8000}/health" || exit 1'
 
 ENTRYPOINT ["tini", "--"]
 CMD ["python", "-m", "futuris.cli", "serve", "--host", "0.0.0.0", "--port", "8000"]
