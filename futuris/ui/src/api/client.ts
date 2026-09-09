@@ -1,4 +1,4 @@
-import { Forecast, Outcome, CalibrationCurve, BacktestRun, EcosystemOverview } from './types';
+import { Forecast, Outcome, CalibrationCurve, BacktestRun, EcosystemOverview, UniverseMatrixResponse, UniversePredictionResponse } from './types';
 
 const API_BASE = '/v1';
 
@@ -107,4 +107,36 @@ export async function triggerMarketForecast(symbol: string = 'BTCUSDT'): Promise
     }),
   });
   return handleResponse<any>(res, `Failed to generate market forecast for ${symbol}`);
+}
+
+export async function fetchUniverseMatrix(): Promise<UniverseMatrixResponse> {
+  const res = await fetch(`${API_BASE}/predictions/matrix`, {
+    headers: getHeaders(),
+  });
+  return handleResponse<UniverseMatrixResponse>(res, 'Failed to fetch universe matrix');
+}
+
+export async function refreshUniverseMatrix(): Promise<UniverseMatrixResponse> {
+  const res = await fetch(`${API_BASE}/predictions/refresh-all`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  return handleResponse<UniverseMatrixResponse>(res, 'Failed to refresh universe predictions');
+}
+
+export async function requestUniversePrediction(
+  target: string,
+  domain?: string,
+  context?: Record<string, any>
+): Promise<UniversePredictionResponse> {
+  const res = await fetch(`${API_BASE}/predictions/predict`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      target,
+      domain,
+      context: context || {},
+    }),
+  });
+  return handleResponse<UniversePredictionResponse>(res, `Failed to request prediction for ${target}`);
 }

@@ -83,84 +83,13 @@ class DemoSeeder:
         live_forecast = res.forecast
         await f_repo.create(live_forecast)
 
-        # 3.1 Seed Market Forecasts for Stratex & Ecosystem
-        from futuris.core.schemas import Driver, EvidenceRef, Forecast
-        from futuris.core.enums import ConfidenceLevel, ForecastStatus, SignalClass, SourceTrust
+        # 3.1 Seed Complete FRIDAY Universe Predictive Matrix across all 9 subsystems
+        from futuris.api.routers.predictions import _generate_universe_forecast
+        from futuris.core.universe_domains import UNIVERSE_TARGETS
 
-        market_evidence = [
-            EvidenceRef(
-                evidence_id=uuid4(),
-                source="intelx:market_research",
-                source_trust=SourceTrust.HIGH,
-                signal_class=SignalClass.EXTERNAL,
-                as_of=now,
-                snapshot_path="data/storage/intelx_seed_market_snapshot.parquet",
-                content_hash="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            )
-        ]
-
-        market_forecast_btc = Forecast(
-            forecast_id=uuid4(),
-            target="market:crypto:BTCUSDT:volatility_24h",
-            as_of=now,
-            horizon=timedelta(hours=24),
-            expires_at=now + timedelta(hours=24),
-            review_at=now + timedelta(hours=6),
-            prediction=0.38,
-            range_lower=-2.8,
-            range_upper=4.6,
-            probability=0.34,
-            confidence=ConfidenceLevel.HIGH,
-            drivers=[
-                Driver(
-                    name="intelx:spot_etf_inflows",
-                    direction="positive",
-                    strength=0.92,
-                    leading_or_lagging="leading",
-                    evidence_refs=[uuid4()],
-                ),
-                Driver(
-                    name="stratex_volatility_idx",
-                    direction="neutral",
-                    strength=0.75,
-                    leading_or_lagging="leading",
-                    evidence_refs=[uuid4()],
-                ),
-            ],
-            evidence=market_evidence,
-            assumptions=["IntelX market research: Bullish spot accumulation", "Stratex equity: $5000+ healthy balance"],
-            model_version="statsforecast:market_volatility@v2",
-            status=ForecastStatus.ACTIVE,
-        )
-        await f_repo.create(market_forecast_btc)
-
-        market_forecast_eth = Forecast(
-            forecast_id=uuid4(),
-            target="market:crypto:ETHUSDT:volatility_24h",
-            as_of=now,
-            horizon=timedelta(hours=24),
-            expires_at=now + timedelta(hours=24),
-            review_at=now + timedelta(hours=6),
-            prediction=0.42,
-            range_lower=-3.2,
-            range_upper=5.1,
-            probability=0.39,
-            confidence=ConfidenceLevel.MEDIUM,
-            drivers=[
-                Driver(
-                    name="intelx:l2_settlement_acceleration",
-                    direction="positive",
-                    strength=0.88,
-                    leading_or_lagging="leading",
-                    evidence_refs=[uuid4()],
-                )
-            ],
-            evidence=market_evidence,
-            assumptions=["IntelX network expansion signals", "Stratex portfolio risk bounds respected"],
-            model_version="statsforecast:market_volatility@v2",
-            status=ForecastStatus.ACTIVE,
-        )
-        await f_repo.create(market_forecast_eth)
+        for u_target in UNIVERSE_TARGETS:
+            if u_target != target:
+                await _generate_universe_forecast(u_target, session=session)
 
         # 4. Generate Family of Scenarios
         scenario_engine = ScenarioEngine(scenario_repo=s_repo)

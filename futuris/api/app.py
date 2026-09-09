@@ -22,6 +22,7 @@ from futuris.api.routers.forecasts import router as forecasts_router
 from futuris.api.routers.friday import router as friday_router
 from futuris.api.routers.market import router as market_router
 from futuris.api.routers.models import router as models_router
+from futuris.api.routers.predictions import router as predictions_router
 from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.api.routers.webhooks import router as webhooks_router
 from futuris.demo.seed import DemoSeeder
@@ -110,6 +111,8 @@ app.include_router(ecosystem_router)
 app.include_router(market_router, prefix="/v1/futuris")
 app.include_router(market_router, prefix="/api/v1/futuris")
 app.include_router(market_router, prefix="/v1/market")
+app.include_router(predictions_router)
+app.include_router(predictions_router, prefix="/api")
 app.include_router(webhooks_router, prefix="/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 

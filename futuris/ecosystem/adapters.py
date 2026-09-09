@@ -242,6 +242,22 @@ class EcosystemAdapter:
                 "capabilities": ["Policy Verification", "Command Gatekeeper", "Audit Logging"],
             },
             {
+                "name": "Cortex",
+                "role": "Cognitive Reasoning & Task Orchestration Engine",
+                "url": "http://localhost:8004",
+                "probe_url": "http://localhost:8004/health",
+                "headers": {},
+                "capabilities": ["Task Decomposition", "Subagent Execution", "SLA Guardrails"],
+            },
+            {
+                "name": "Forge",
+                "role": "Autonomous CI/CD & Code Generation Worktree",
+                "url": "http://localhost:8005",
+                "probe_url": "http://localhost:8005/health",
+                "headers": {},
+                "capabilities": ["Automated Testing", "Canary Deployment", "Regression Detection"],
+            },
+            {
                 "name": "FRIDAY",
                 "role": "Central Desktop Multimodal OS & Orchestrator",
                 "url": "http://localhost:9000",

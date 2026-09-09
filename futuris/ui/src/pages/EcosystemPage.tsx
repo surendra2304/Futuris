@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { fetchPeers, triggerForecast, triggerDemoSeed, triggerMarketForecast } from '../api/client';
+import { fetchPeers, triggerForecast, triggerDemoSeed, triggerMarketForecast, requestUniversePrediction } from '../api/client';
 import { EcosystemOverview, PeerAgent } from '../api/types';
-import { Radio, CheckCircle, AlertTriangle, XCircle, RefreshCw, Zap, Server, Activity, ShieldCheck } from 'lucide-react';
+import { Radio, CheckCircle, AlertTriangle, XCircle, RefreshCw, Zap, Server, Activity, ShieldCheck, Shield, Cpu, Terminal, Database } from 'lucide-react';
 
 export const EcosystemPage: React.FC = () => {
   const [data, setData] = useState<EcosystemOverview | null>(null);
@@ -61,6 +61,19 @@ export const EcosystemPage: React.FC = () => {
       setActionMsg(res.message || 'Seeded 180 days of workspace data successfully.');
     } catch (err: unknown) {
       setActionMsg(err instanceof Error ? err.message : 'Seeding failed');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handlePredictUniverse = async (target: string, label: string) => {
+    setActionBusy(true);
+    setActionMsg(null);
+    try {
+      const res = await requestUniversePrediction(target);
+      setActionMsg(`Generated ${label} prediction! Risk: ${res.risk_level}, Projected: ${res.point_prediction.toFixed(1)} ${res.unit} (Confidence: ${res.confidence})`);
+    } catch (err: unknown) {
+      setActionMsg(err instanceof Error ? err.message : `Failed to predict ${label}`);
     } finally {
       setActionBusy(false);
     }
@@ -154,12 +167,52 @@ export const EcosystemPage: React.FC = () => {
             <span>Generate Trading Volatility Forecast (Stratex + Memora)</span>
           </button>
           <button
+            onClick={() => handlePredictUniverse('sentinel:security:threat_anomaly_risk_24h', 'Sentinel Threat Anomaly')}
+            disabled={actionBusy}
+            className="flex items-center space-x-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-xs font-semibold shadow-sm disabled:opacity-50"
+          >
+            <Shield className="w-4 h-4" />
+            <span>Sentinel Threat Risk</span>
+          </button>
+          <button
+            onClick={() => handlePredictUniverse('cortex:execution:sla_breach_probability_24h', 'Cortex Task SLA')}
+            disabled={actionBusy}
+            className="flex items-center space-x-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md text-xs font-semibold shadow-sm disabled:opacity-50"
+          >
+            <Cpu className="w-4 h-4" />
+            <span>Cortex SLA Risk</span>
+          </button>
+          <button
+            onClick={() => handlePredictUniverse('forge:ci_cd:pipeline_failure_risk_24h', 'Forge CI/CD Pipeline')}
+            disabled={actionBusy}
+            className="flex items-center space-x-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-xs font-semibold shadow-sm disabled:opacity-50"
+          >
+            <Terminal className="w-4 h-4" />
+            <span>Forge CI/CD Risk</span>
+          </button>
+          <button
+            onClick={() => handlePredictUniverse('memora:storage:capacity_exhaustion_days', 'Memora Storage Horizon')}
+            disabled={actionBusy}
+            className="flex items-center space-x-2 px-4 py-2 bg-cyan-700 hover:bg-cyan-800 text-white rounded-md text-xs font-semibold shadow-sm disabled:opacity-50"
+          >
+            <Database className="w-4 h-4" />
+            <span>Memora Storage Horizon</span>
+          </button>
+          <button
+            onClick={() => handlePredictUniverse('inference:gpu:vram_oom_probability_24h', 'Inference GPU VRAM')}
+            disabled={actionBusy}
+            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-semibold shadow-sm disabled:opacity-50"
+          >
+            <Zap className="w-4 h-4" />
+            <span>Inference GPU OOM Risk</span>
+          </button>
+          <button
             onClick={handleSeed}
             disabled={actionBusy}
             className="flex items-center space-x-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-md text-xs font-semibold disabled:opacity-50"
           >
             <ShieldCheck className="w-4 h-4 text-slate-500" />
-            <span>Populate 180-Day Benchmark Workspace</span>
+            <span>Populate 9-Agent Matrix Workspace</span>
           </button>
         </div>
       </div>

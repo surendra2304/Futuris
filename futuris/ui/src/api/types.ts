@@ -97,3 +97,59 @@ export interface EcosystemOverview {
   total_peers: number;
   timestamp: string;
 }
+
+export type RiskLevel = 'NOMINAL' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
+
+export interface TargetPostureItem {
+  target: string;
+  name: string;
+  domain: string;
+  point_prediction: number;
+  unit: string;
+  range_lower: number;
+  range_upper: number;
+  probability: number | null;
+  confidence: string;
+  risk_level: RiskLevel;
+  mitigation_action: string;
+  interpretation: string;
+  last_updated: string;
+}
+
+export interface DomainPostureSummary {
+  domain: string;
+  display_name: string;
+  risk_level: RiskLevel;
+  target_count: number;
+  targets: TargetPostureItem[];
+}
+
+export interface UniverseMatrixResponse {
+  ecosystem_health_score: number;
+  overall_posture: RiskLevel;
+  total_domains: number;
+  total_active_targets: number;
+  domains: DomainPostureSummary[];
+  timestamp: string;
+}
+
+export interface UniversePredictionResponse {
+  forecast_id: string;
+  target: string;
+  target_name: string;
+  domain: string;
+  point_prediction: number;
+  unit: string;
+  range_lower: number;
+  range_upper: number;
+  probability: number | null;
+  confidence: string;
+  risk_level: RiskLevel;
+  mitigation_action: string;
+  interpretation: string;
+  drivers: string[];
+  model_version: string;
+  as_of: string;
+  expires_at: string;
+  intelx_context_included: boolean;
+}
