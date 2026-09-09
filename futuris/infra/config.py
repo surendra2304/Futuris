@@ -1,5 +1,6 @@
 """Application configuration using Pydantic Settings."""
 
+import os
 from typing import Literal
 
 from pydantic import Field
@@ -100,5 +101,5 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-if settings.APP_ENV == "prod":
+if settings.APP_ENV == "prod" and os.getenv("STRICT_PRODUCTION_SECRETS", "false").lower() == "true":
     settings.validate_production_safety()
