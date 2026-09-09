@@ -43,4 +43,4 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
     CMD sh -c 'curl -f "http://127.0.0.1:${PORT:-8000}/health" || exit 1'
 
 ENTRYPOINT ["tini", "--"]
-CMD ["python", "-m", "futuris.cli", "serve", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "python -m futuris.cli serve --host 0.0.0.0 --port ${PORT:-8000}"]

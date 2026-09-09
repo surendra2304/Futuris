@@ -89,7 +89,7 @@ class DemoSeeder:
 
         for u_target in UNIVERSE_TARGETS:
             if u_target != target:
-                await _generate_universe_forecast(u_target, session=session)
+                await _generate_universe_forecast(u_target, session=session, skip_intelx=True)
 
         # 4. Generate Family of Scenarios
         scenario_engine = ScenarioEngine(scenario_repo=s_repo)

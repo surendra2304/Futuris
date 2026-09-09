@@ -111,29 +111,31 @@ async def _generate_universe_forecast(
     target: str,
     context: dict[str, Any] | None = None,
     session: AsyncSession | None = None,
+    skip_intelx: bool = False,
 ) -> Forecast:
     """Deterministically compute or calibrate a forecast for any FRIDAY Universe target."""
     spec = get_target_spec(target)
     now = datetime.now(UTC)
     ctx = context or {}
 
-    # Query IntelX context if available (skip during pytest to avoid test suite network latency)
+    # Query IntelX context if available (skip during pytest or seeding to avoid network latency)
     intelx_findings = []
     intelx_included = False
-    try:
-        import sys
-        if "pytest" not in sys.modules:
-            injector = IntelXContextInjector(
-                base_url=settings.INTELX_URL,
-                api_key=settings.INTELX_API_KEY,
-                timeout_seconds=2.0,
-            )
-            reports = await injector.fetch_recent_research(target, as_of=now)
-            if reports:
-                intelx_findings = [f"intelx:{r.summary[:45]}" for r in reports]
-                intelx_included = True
-    except Exception as exc:
-        logger.debug("intelx_prediction_enrichment_skipped", target=target, error=str(exc))
+    if not skip_intelx:
+        try:
+            import sys
+            if "pytest" not in sys.modules:
+                injector = IntelXContextInjector(
+                    base_url=settings.INTELX_URL,
+                    api_key=settings.INTELX_API_KEY,
+                    timeout_seconds=1.5,
+                )
+                reports = await injector.fetch_recent_research(target, as_of=now)
+                if reports:
+                    intelx_findings = [f"intelx:{r.summary[:45]}" for r in reports]
+                    intelx_included = True
+        except Exception as exc:
+            logger.debug("intelx_prediction_enrichment_skipped", target=target, error=str(exc))
 
     # Base values derived from target spec and context overrides
     pred_override = ctx.get("point_estimate") or ctx.get("current_value")

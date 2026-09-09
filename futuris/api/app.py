@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
 
             async def _bg_seed():
                 try:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(2.0)
                     async with async_session_factory() as session:
                         count_res = await session.execute(select(func.count(ForecastModel.forecast_id)))
                         forecast_count = count_res.scalar_one_or_none() or 0
@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
                     if forecast_count == 0:
                         logger.info("startup_db_empty_initiating_seed")
                         seeder = DemoSeeder(seed=42)
-                        await seeder.run()
+                        await seeder.run(days=7, backtest_days=2)
                         logger.info("startup_db_initial_seed_completed")
                 except Exception as exc:
                     logger.warning("startup_background_seed_failed", error=str(exc))
