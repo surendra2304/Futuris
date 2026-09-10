@@ -55,9 +55,9 @@ async def lifespan(app: FastAPI):
                         forecast_count = count_res.scalar_one_or_none() or 0
 
                     if forecast_count == 0:
-                        logger.info("startup_db_empty_initiating_seed")
+                        logger.info("startup_db_empty_initiating_fast_seed")
                         seeder = DemoSeeder(seed=42)
-                        await seeder.run(days=7, backtest_days=2)
+                        await seeder.run(days=7, backtest_days=0, fast_mode=True)
                         logger.info("startup_db_initial_seed_completed")
                 except Exception as exc:
                     logger.warning("startup_background_seed_failed", error=str(exc))

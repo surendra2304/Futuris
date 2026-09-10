@@ -42,6 +42,7 @@ class DemoSeeder:
         days: int,
         backtest_days: int,
         target: str,
+        fast_mode: bool = False,
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
 
@@ -72,21 +73,26 @@ class DemoSeeder:
         session.add(active_m)
         await session.flush()
 
-        # 3. Run Live Pipeline Forecast
-        pipeline = ForecastingPipeline()
-        res = await pipeline.run(
-            target=target,
-            as_of=now,
-            horizon=timedelta(hours=24),
-            lookback_days=min(14, days),
-        )
-        live_forecast = res.forecast
-        await f_repo.create(live_forecast)
-
-        # 3.1 Seed Complete FRIDAY Universe Predictive Matrix across all 9 subsystems
         from futuris.api.routers.predictions import _generate_universe_forecast
         from futuris.core.universe_domains import UNIVERSE_TARGETS
 
+        if fast_mode:
+            live_forecast = await _generate_universe_forecast(
+                target, session=session, skip_intelx=True
+            )
+        else:
+            # 3. Run Live Pipeline Forecast
+            pipeline = ForecastingPipeline()
+            res = await pipeline.run(
+                target=target,
+                as_of=now,
+                horizon=timedelta(hours=24),
+                lookback_days=min(14, days),
+            )
+            live_forecast = res.forecast
+            await f_repo.create(live_forecast)
+
+        # 3.1 Seed Complete FRIDAY Universe Predictive Matrix across all 9 subsystems
         for u_target in UNIVERSE_TARGETS:
             if u_target != target:
                 await _generate_universe_forecast(u_target, session=session, skip_intelx=True)
@@ -132,14 +138,17 @@ class DemoSeeder:
         comparison = scenario_engine.compare(live_forecast, scenario_results)
 
         # 5. Execute Backtest
-        backtester = BacktestEngine(forecast_repo=f_repo, outcome_repo=o_repo)
-        bt_report = await backtester.run_backtest(
-            target=target,
-            start_date=now - timedelta(days=backtest_days),
-            end_date=now - timedelta(days=1),
-            stride_hours=24,
-            horizon=timedelta(hours=24),
-        )
+        total_bt = 0
+        if not fast_mode and backtest_days > 0:
+            backtester = BacktestEngine(forecast_repo=f_repo, outcome_repo=o_repo)
+            bt_report = await backtester.run_backtest(
+                target=target,
+                start_date=now - timedelta(days=backtest_days),
+                end_date=now - timedelta(days=1),
+                stride_hours=24,
+                horizon=timedelta(hours=24),
+            )
+            total_bt = bt_report.total_forecasts
 
         # 6. Force Lifecycle Sweep
         sweep_report = await lifecycle_mgr.run_lifecycle_sweep(
@@ -165,7 +174,7 @@ class DemoSeeder:
             "live_confidence": live_forecast.confidence.value,
             "scenarios_evaluated": len(scenario_results),
             "top_divergence": top_div,
-            "backtest_runs": bt_report.total_forecasts,
+            "backtest_runs": total_bt,
             "resolved_outcomes": sweep_report.resolved_count,
             "calibration_ece": cal_curve.expected_calibration_error,
         }
@@ -175,13 +184,14 @@ class DemoSeeder:
         days: int = 180,
         backtest_days: int = 30,
         target: str = "service:checkout:capacity_exceedance_24h",
+        fast_mode: bool = False,
     ) -> dict[str, Any]:
         """Execute full end-to-end demo bootstrapping sequence."""
-        logger.info("demo_bootstrap_started", days=days, seed=self.seed)
+        logger.info("demo_bootstrap_started", days=days, seed=self.seed, fast_mode=fast_mode)
 
         if self.session:
             return await self._execute_with_session(
-                self.session, days, backtest_days, target
+                self.session, days, backtest_days, target, fast_mode=fast_mode
             )
 
         from futuris.storage.db import engine
@@ -192,7 +202,7 @@ class DemoSeeder:
 
         async with async_session_factory() as session:
             res = await self._execute_with_session(
-                session, days, backtest_days, target
+                session, days, backtest_days, target, fast_mode=fast_mode
             )
             await session.commit()
             return res
