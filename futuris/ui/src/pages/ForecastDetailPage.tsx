@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { fetchForecastById } from '../api/client';
 import { Forecast } from '../api/types';
-import { ArrowLeft, CheckCircle, ShieldAlert, Activity, Cpu } from 'lucide-react';
+import { ArrowLeft, CheckCircle, ShieldAlert, Activity, Cpu, Calendar, Clock, RefreshCw } from 'lucide-react';
 
 export const ForecastDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -88,6 +88,43 @@ export const ForecastDetailPage: React.FC = () => {
     return `[${lower.toFixed(1)}, ${upper.toFixed(1)}]`;
   };
 
+  const formatDateTime = (dateStr?: string | null): string => {
+    if (!dateStr) return 'N/A';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return String(dateStr);
+      return d.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+    } catch {
+      return String(dateStr);
+    }
+  };
+
+  const formatRelativeTime = (dateStr?: string | null): string => {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr);
+      const now = new Date();
+      const diffMs = now.getTime() - d.getTime();
+      const diffMins = Math.round(diffMs / 60000);
+      if (Math.abs(diffMins) < 1) return 'just now';
+      if (diffMins > 0 && diffMins < 60) return `${diffMins}m ago`;
+      const diffHours = Math.round(diffMins / 60);
+      if (diffHours > 0 && diffHours < 24) return `${diffHours}h ago`;
+      const diffDays = Math.round(diffHours / 24);
+      if (diffDays > 0) return `${diffDays}d ago`;
+      return '';
+    } catch {
+      return '';
+    }
+  };
+
   const getDomainLabel = (target: string): string => {
     const t = target.toLowerCase();
     if (t.startsWith('sentinel')) return 'SENTINEL (Cybersecurity & Governance)';
@@ -141,12 +178,32 @@ export const ForecastDetailPage: React.FC = () => {
           </div>
           <p className="text-xs text-slate-400 mt-1 font-mono">Forecast ID: {forecast.forecast_id}</p>
         </div>
-        <div className="text-left md:text-right">
-          <div className="text-2xl font-bold text-slate-900">
+        <div className="text-left md:text-right space-y-1">
+          <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Point Prediction</div>
+          <div className="text-3xl font-extrabold text-slate-900 tracking-tight">
             {formatPrediction(forecast.target, forecast.prediction)}
           </div>
           <div className="text-xs text-slate-500 font-mono">
             Range: {formatRange(forecast.target, forecast.range.lower, forecast.range.upper)}
+          </div>
+          <div className="pt-2 border-t border-slate-100 space-y-0.5 text-xs text-slate-600">
+            <div className="flex items-center md:justify-end space-x-1.5 font-medium">
+              <Calendar className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
+              <span>
+                Generated: <strong className="font-semibold text-slate-900">{formatDateTime(forecast.as_of || forecast.created_at)}</strong>
+              </span>
+              {forecast.as_of && formatRelativeTime(forecast.as_of) && (
+                <span className="text-[10px] text-slate-400 font-normal">({formatRelativeTime(forecast.as_of)})</span>
+              )}
+            </div>
+            <div className="flex items-center md:justify-end space-x-1.5 text-slate-500 text-[11px] font-mono">
+              <Clock className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+              <span>Horizon: {forecast.horizon || '24h'} • Expires: {formatDateTime(forecast.expires_at)}</span>
+            </div>
+            <div className="flex items-center md:justify-end space-x-1.5 text-slate-400 text-[10px] font-mono">
+              <RefreshCw className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+              <span>Review Schedule: {formatDateTime(forecast.review_at)}</span>
+            </div>
           </div>
         </div>
       </div>

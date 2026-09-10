@@ -37,9 +37,12 @@ export interface Forecast {
   evidence: EvidenceRef[];
   assumptions: string[];
   model: string;
+  as_of?: string;
+  horizon?: string;
   expires_at: string;
   review_at: string;
   status: ForecastStatus;
+  created_at?: string;
 }
 
 export interface Outcome {

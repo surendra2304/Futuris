@@ -36,3 +36,5 @@ data/storage/
 postgres_data/
 node_modules/
 futuris/ui/node_modules/
+ask_inference_from_futuris.py
+peer_mesh_futuris_results.json

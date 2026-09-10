@@ -87,9 +87,12 @@ class ForecastResponse(BaseModel):
     evidence: list[EvidenceRef]
     assumptions: list[str]
     model: str
+    as_of: datetime
+    horizon: str = "24h"
     expires_at: datetime
     review_at: datetime
     status: ForecastStatus
+    created_at: datetime | None = None
 
 
 class ForecastAbstainedResponse(BaseModel):
@@ -193,9 +196,12 @@ async def create_forecast(
         evidence=saved.evidence,
         assumptions=saved.assumptions,
         model=saved.model_version,
+        as_of=saved.as_of,
+        horizon=str(saved.horizon),
         expires_at=saved.expires_at,
         review_at=saved.review_at,
         status=saved.status,
+        created_at=saved.as_of,
     )
 
 
@@ -242,9 +248,12 @@ async def list_forecasts(
             evidence=i.evidence,
             assumptions=i.assumptions,
             model=i.model_version,
+            as_of=i.as_of,
+            horizon=str(i.horizon),
             expires_at=i.expires_at,
             review_at=i.review_at,
             status=i.status,
+            created_at=i.as_of,
         )
         for i in sliced
     ]
@@ -272,9 +281,12 @@ async def get_forecast(
         evidence=f.evidence,
         assumptions=f.assumptions,
         model=f.model_version,
+        as_of=f.as_of,
+        horizon=str(f.horizon),
         expires_at=f.expires_at,
         review_at=f.review_at,
         status=f.status,
+        created_at=f.as_of,
     )
 
 
@@ -316,9 +328,12 @@ async def invalidate_forecast(
         evidence=updated.evidence,
         assumptions=updated.assumptions,
         model=updated.model_version,
+        as_of=updated.as_of,
+        horizon=str(updated.horizon),
         expires_at=updated.expires_at,
         review_at=updated.review_at,
         status=updated.status,
+        created_at=updated.as_of,
     )
 
 

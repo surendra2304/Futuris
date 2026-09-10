@@ -18,6 +18,8 @@ import {
   Globe,
   Radio,
   CheckCircle2,
+  Calendar,
+  Clock,
 } from 'lucide-react';
 
 export const ForecastListPage: React.FC = () => {
@@ -136,6 +138,43 @@ export const ForecastListPage: React.FC = () => {
       return `[${lower.toFixed(0)}, ${upper.toFixed(0)}] rpm`;
     }
     return `[${lower.toFixed(1)}, ${upper.toFixed(1)}]`;
+  };
+
+  // Format date and time for forecast timestamps
+  const formatDateTime = (dateStr?: string | null): string => {
+    if (!dateStr) return 'N/A';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return String(dateStr);
+      return d.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return String(dateStr);
+    }
+  };
+
+  const formatRelativeTime = (dateStr?: string | null): string => {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr);
+      const now = new Date();
+      const diffMs = now.getTime() - d.getTime();
+      const diffMins = Math.round(diffMs / 60000);
+      if (Math.abs(diffMins) < 1) return 'just now';
+      if (diffMins > 0 && diffMins < 60) return `${diffMins}m ago`;
+      const diffHours = Math.round(diffMins / 60);
+      if (diffHours > 0 && diffHours < 24) return `${diffHours}h ago`;
+      const diffDays = Math.round(diffHours / 24);
+      if (diffDays > 0) return `${diffDays}d ago`;
+      return '';
+    } catch {
+      return '';
+    }
   };
 
   // Deduce domain info and human label
@@ -369,6 +408,13 @@ export const ForecastListPage: React.FC = () => {
               <div className="text-slate-400 uppercase text-[10px] font-semibold">IntelX Grounding</div>
               <div className="text-sm font-bold text-emerald-400 font-mono">ONLINE (Exogenous)</div>
             </div>
+            <div>
+              <div className="text-slate-400 uppercase text-[10px] font-semibold">Last Swept</div>
+              <div className="text-sm font-bold text-slate-200 font-mono flex items-center space-x-1">
+                <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                <span>{formatDateTime(matrix.timestamp)}</span>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -457,8 +503,8 @@ export const ForecastListPage: React.FC = () => {
               <tr>
                 <th className="px-4 py-3 text-left">Target / Subsystem</th>
                 <th className="px-4 py-3 text-left">
-                  <div className="flex items-center space-x-1" title="Calibrated central point estimate">
-                    <span>Point Prediction</span>
+                  <div className="flex items-center space-x-1" title="Calibrated point prediction, generation timestamp, and expiration horizon">
+                    <span>Point Prediction & Time</span>
                     <HelpCircle className="w-3.5 h-3.5 text-slate-400" />
                   </div>
                 </th>
@@ -482,6 +528,7 @@ export const ForecastListPage: React.FC = () => {
             <tbody className="divide-y divide-slate-200">
               {displayedForecasts.map((f) => {
                 const info = getDomainInfo(f.target);
+                const relTime = formatRelativeTime(f.as_of);
                 return (
                   <tr key={f.forecast_id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-3">
@@ -499,8 +546,33 @@ export const ForecastListPage: React.FC = () => {
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 font-semibold text-slate-800 text-xs">
-                      {formatPrediction(f.target, f.prediction)}
+                    <td className="px-4 py-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <span className="font-bold text-slate-900 text-sm tracking-tight">
+                            {formatPrediction(f.target, f.prediction)}
+                          </span>
+                          <span
+                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200"
+                            title="Forecast Horizon"
+                          >
+                            {f.horizon || '24h'}
+                          </span>
+                        </div>
+                        <div className="flex items-center space-x-1.5 text-[11px] text-slate-600 font-medium">
+                          <Calendar className="w-3.5 h-3.5 text-indigo-500 flex-shrink-0" />
+                          <span>{formatDateTime(f.as_of || f.created_at || f.expires_at)}</span>
+                          {relTime && (
+                            <span className="text-[10px] text-slate-400 font-normal">({relTime})</span>
+                          )}
+                        </div>
+                        {f.expires_at && (
+                          <div className="flex items-center space-x-1.5 text-[10px] text-slate-400 font-mono">
+                            <Clock className="w-3 h-3 text-amber-500 flex-shrink-0" />
+                            <span>Expires: {formatDateTime(f.expires_at)}</span>
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-500 font-mono">
                       {formatRange(f.target, f.range.lower, f.range.upper)}
