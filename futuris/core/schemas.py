@@ -159,6 +159,34 @@ class Forecast(BaseModel):
         default=None,
         description="Associated scenario identifier if part of a counterfactual branch.",
     )
+    predictive_distribution: dict[str, float] = Field(
+        default_factory=dict,
+        description="Predictive probability distribution percentiles (e.g. p10, p50, p90, exceedance).",
+    )
+    intervals: list[dict[str, float]] = Field(
+        default_factory=list,
+        description="Step-by-step predictive uncertainty intervals.",
+    )
+    calibration_metrics: dict[str, float] = Field(
+        default_factory=dict,
+        description="Calibration quality metrics (ECE, Brier score, empirical coverage).",
+    )
+    model_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Underlying model architecture, family, configuration hash, and hyperparameters.",
+    )
+    prediction_is_not_authorization: bool = Field(
+        default=True,
+        description="Architectural safety invariant: predictions never grant execution authority.",
+    )
+    executable_commands: list[str] = Field(
+        default_factory=list,
+        description="Strictly forbidden executable commands list; must always remain empty.",
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        description="Optional idempotency deduplication key.",
+    )
 
     @field_validator("probability")
     @classmethod
@@ -177,6 +205,22 @@ class Forecast(BaseModel):
             msg = f"Forecast horizon must be strictly positive (> 0), got {v}"
             raise ValueError(msg)
         return v
+
+    @field_validator("executable_commands")
+    @classmethod
+    def validate_executable_commands_empty(cls, v: list[str]) -> list[str]:
+        """Enforce that forecasts never return executable system commands."""
+        if v:
+            raise ValueError("Invariant violation: executable commands are strictly forbidden in forecast responses.")
+        return v
+
+    @field_validator("prediction_is_not_authorization")
+    @classmethod
+    def validate_prediction_is_not_authorization(cls, v: bool) -> bool:
+        """Enforce that prediction_is_not_authorization invariant remains True."""
+        if not v:
+            raise ValueError("Invariant violation: prediction_is_not_authorization must always be True.")
+        return True
 
     @model_validator(mode="after")
     def validate_forecast_invariants(self) -> "Forecast":

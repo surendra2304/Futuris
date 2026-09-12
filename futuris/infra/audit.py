@@ -96,3 +96,25 @@ class AuditLogger:
             )
             for m in res.scalars().all()
         ]
+
+    async def get_entity_history(self, entity: str, entity_id: Any) -> list[AuditRecord]:
+        """Query audit log entries for a specific entity ID."""
+        stmt = (
+            select(AuditLogModel)
+            .where(AuditLogModel.entity == entity, AuditLogModel.entity_id == str(entity_id))
+            .order_by(AuditLogModel.timestamp.desc())
+        )
+        res = await self.session.execute(stmt)
+        return [
+            AuditRecord(
+                audit_id=m.audit_id,
+                actor_label=m.actor_label,
+                action=m.action,
+                entity=m.entity,
+                entity_id=m.entity_id,
+                payload_hash=m.payload_hash,
+                timestamp=m.timestamp,
+            )
+            for m in res.scalars().all()
+        ]
+

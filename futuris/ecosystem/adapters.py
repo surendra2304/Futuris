@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+import asyncio
 import httpx
 
 from futuris.infra.config import settings
@@ -236,67 +237,68 @@ class EcosystemAdapter:
             {
                 "name": "Sentinel",
                 "role": "Cybersecurity & Governance Defense Shield",
-                "url": "http://localhost:8003",
-                "probe_url": "http://localhost:8003/health",
+                "url": getattr(settings, "SENTINEL_URL", "http://localhost:8003"),
+                "probe_url": f"{getattr(settings, 'SENTINEL_URL', 'http://localhost:8003').rstrip('/')}/health",
                 "headers": {},
                 "capabilities": ["Policy Verification", "Command Gatekeeper", "Audit Logging"],
             },
             {
                 "name": "Cortex",
                 "role": "Cognitive Reasoning & Task Orchestration Engine",
-                "url": "http://localhost:8004",
-                "probe_url": "http://localhost:8004/health",
+                "url": getattr(settings, "CORTEX_URL", "https://cortex-qifr.onrender.com"),
+                "probe_url": f"{getattr(settings, 'CORTEX_URL', 'https://cortex-qifr.onrender.com').rstrip('/')}/health",
                 "headers": {},
                 "capabilities": ["Task Decomposition", "Subagent Execution", "SLA Guardrails"],
             },
             {
                 "name": "Forge",
                 "role": "Autonomous CI/CD & Code Generation Worktree",
-                "url": "http://localhost:8005",
-                "probe_url": "http://localhost:8005/health",
+                "url": getattr(settings, "FORGE_URL", "http://localhost:8001"),
+                "probe_url": f"{getattr(settings, 'FORGE_URL', 'http://localhost:8001').rstrip('/')}/health",
                 "headers": {},
                 "capabilities": ["Automated Testing", "Canary Deployment", "Regression Detection"],
             },
             {
                 "name": "FRIDAY",
                 "role": "Central Desktop Multimodal OS & Orchestrator",
-                "url": "http://localhost:9000",
-                "probe_url": "http://localhost:9000/health",
+                "url": getattr(settings, "FRIDAY_URL", "http://localhost:9000"),
+                "probe_url": f"{getattr(settings, 'FRIDAY_URL', 'http://localhost:9000').rstrip('/')}/health",
                 "headers": {},
                 "capabilities": ["Master Delegation", "Voice Control", "Cross-Agent Routing"],
             },
         ]
 
-        results = []
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            for p in peers_to_check:
-                t0 = time.perf_counter()
-                status_str = "offline"
-                latency_ms = None
-                try:
-                    resp = await client.get(p["probe_url"], headers=p["headers"])
-                    latency_ms = round((time.perf_counter() - t0) * 1000, 1)
-                    if resp.status_code == 200:
-                        status_str = "online"
-                    elif resp.status_code in (401, 403, 404):
-                        status_str = "degraded"
-                    else:
-                        status_str = "offline"
-                except Exception:
-                    # If localhost agents aren't running locally right now, report as offline/standby
+        async def _check_peer(client: httpx.AsyncClient, p: dict[str, Any]) -> dict[str, Any]:
+            import time
+            t0 = time.perf_counter()
+            status_str = "offline"
+            latency_ms = None
+            try:
+                resp = await client.get(p["probe_url"], headers=p["headers"], timeout=1.5)
+                latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+                if resp.status_code == 200:
+                    status_str = "online"
+                elif resp.status_code in (401, 403, 404):
+                    status_str = "degraded"
+                else:
                     status_str = "offline"
+            except Exception:
+                status_str = "offline"
 
-                results.append({
-                    "name": p["name"],
-                    "role": p["role"],
-                    "url": p["url"],
-                    "status": status_str,
-                    "latency_ms": latency_ms,
-                    "last_interaction": datetime.now(UTC).isoformat(),
-                    "capabilities": p["capabilities"],
-                })
+            return {
+                "name": p["name"],
+                "role": p["role"],
+                "url": p["url"],
+                "status": status_str,
+                "latency_ms": latency_ms,
+                "last_interaction": datetime.now(UTC).isoformat(),
+                "capabilities": p["capabilities"],
+            }
 
-        return results
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            tasks = [_check_peer(client, p) for p in peers_to_check]
+            results = await asyncio.gather(*tasks)
+            return list(results)
 
 
 ecosystem_adapter = EcosystemAdapter()

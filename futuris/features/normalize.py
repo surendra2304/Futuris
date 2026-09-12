@@ -1,12 +1,172 @@
 """Data normalization, deduplication, regular grid alignment, and quality reporting."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 from futuris.connectors.base import Observation
+
+
+class TimezoneNormalizationError(ValueError):
+    """Raised when an invalid, ambiguous, or unparseable timezone is encountered."""
+    pass
+
+
+class UnitMismatchError(ValueError):
+    """Raised when incoming telemetry observations have mismatched measurement units."""
+    pass
+
+
+class HorizonMismatchError(ValueError):
+    """Raised when a requested horizon mismatches the temporal span or resolution."""
+    pass
+
+
+class DataStalenessError(RuntimeError):
+    """Raised when telemetry data is stale and exceeds the maximum acceptable latency."""
+    pass
+
+
+class InsufficientDataError(RuntimeError):
+    """Raised when observation data is too sparse, truncated, or low-coverage for forecasting."""
+    pass
+
+
+def normalize_timestamp(dt: Any) -> datetime:
+    """Normalize any datetime, ISO-8601 string, or timestamp into an explicit UTC datetime."""
+    if isinstance(dt, datetime):
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+    if isinstance(dt, str):
+        try:
+            parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+        except Exception as err:
+            raise TimezoneNormalizationError(f"Cannot normalize timestamp string '{dt}' to UTC: {err}") from err
+    if isinstance(dt, (int, float)):
+        try:
+            return datetime.fromtimestamp(dt, tz=UTC)
+        except Exception as err:
+            raise TimezoneNormalizationError(f"Cannot normalize epoch timestamp '{dt}' to UTC: {err}") from err
+    raise TimezoneNormalizationError(f"Unsupported timestamp type: {type(dt)}")
+
+
+def _extract_timestamp(item: Any) -> datetime:
+    """Helper to extract datetime from Observation, dict, datetime, or string."""
+    if hasattr(item, "observed_at"):
+        return normalize_timestamp(item.observed_at)
+    if hasattr(item, "timestamp"):
+        return normalize_timestamp(item.timestamp)
+    if isinstance(item, dict):
+        raw = item.get("observed_at") or item.get("timestamp") or item.get("time") or item.get("as_of")
+        if raw is not None:
+            return normalize_timestamp(raw)
+    return normalize_timestamp(item)
+
+
+def check_data_staleness(
+    observations: Any,
+    as_of: datetime | None = None,
+    max_staleness_hours: float | None = None,
+    max_staleness_seconds: float | None = None,
+    raise_error: bool = False,
+) -> bool:
+    """Evaluate whether the latest observation timestamp is stale compared to as_of."""
+    if not observations:
+        if raise_error:
+            raise DataStalenessError("Cannot check staleness: observations dataset is empty.")
+        return True
+
+    ref_as_of = normalize_timestamp(as_of) if as_of is not None else datetime.now(UTC)
+    threshold_seconds = (
+        max_staleness_seconds
+        if max_staleness_seconds is not None
+        else (max_staleness_hours if max_staleness_hours is not None else 24.0) * 3600.0
+    )
+
+    try:
+        latest_obs = max(_extract_timestamp(o) for o in observations)
+    except Exception as err:
+        if raise_error:
+            raise DataStalenessError(f"Failed to parse observation timestamps: {err}") from err
+        return True
+
+    time_delta = (ref_as_of - latest_obs).total_seconds()
+    is_stale = time_delta > threshold_seconds
+
+    if is_stale and raise_error:
+        raise DataStalenessError(
+            f"Data staleness detected: latest observation ({latest_obs.isoformat()}) is "
+            f"{time_delta:.1f}s old (exceeds threshold of {threshold_seconds:.1f}s)."
+        )
+    return is_stale
+
+
+def check_insufficient_data(
+    observations: Any,
+    min_points: int = 24,
+    min_coverage_percentage: float = 50.0,
+    raise_error: bool = False,
+) -> tuple[bool, str]:
+    """Check if observation set meets minimum volume and coverage thresholds."""
+    count = len(observations) if hasattr(observations, "__len__") else 0
+    if count == 0:
+        msg = "Insufficient data: zero observations provided."
+        if raise_error:
+            raise InsufficientDataError(msg)
+        return True, msg
+
+    if count < min_points:
+        msg = f"Insufficient data: observation count ({count}) is below minimum required ({min_points})."
+        if raise_error:
+            raise InsufficientDataError(msg)
+        return True, msg
+
+    return False, "Data sufficiency verified."
+
+
+def validate_horizon(
+    start_time: Any,
+    end_time: Any,
+    min_horizon: timedelta = timedelta(minutes=5),
+    max_horizon: timedelta = timedelta(days=90),
+) -> timedelta:
+    """Validate that end_time > start_time and horizon duration is within acceptable bounds."""
+    start_utc = normalize_timestamp(start_time)
+    end_utc = normalize_timestamp(end_time)
+    if end_utc <= start_utc:
+        raise HorizonMismatchError(
+            f"Horizon end time ({end_utc.isoformat()}) must be strictly after start time ({start_utc.isoformat()})."
+        )
+    delta = end_utc - start_utc
+    if delta < min_horizon:
+        raise HorizonMismatchError(
+            f"Horizon duration {delta} is below minimum allowed horizon {min_horizon}."
+        )
+    if delta > max_horizon:
+        raise HorizonMismatchError(
+            f"Horizon duration {delta} exceeds maximum allowed horizon {max_horizon}."
+        )
+    return delta
+
+
+def check_missing_telemetry(
+    timestamps: list[Any],
+    max_allowed_gap: timedelta = timedelta(hours=2),
+) -> bool:
+    """Check for telemetry dropouts or temporal gaps exceeding the maximum allowed interval."""
+    if len(timestamps) < 2:
+        return False
+    normalized = sorted(normalize_timestamp(t) for t in timestamps)
+    for i in range(1, len(normalized)):
+        gap = normalized[i] - normalized[i - 1]
+        if gap > max_allowed_gap:
+            raise InsufficientDataError(
+                f"Missing telemetry gap of {gap} detected between {normalized[i-1].isoformat()} "
+                f"and {normalized[i].isoformat()} (max allowed gap: {max_allowed_gap})."
+            )
+    return False
 
 
 class DataQualityReport(BaseModel):
@@ -69,8 +229,7 @@ class Normalizer:
     ) -> TrustedSignalSet:
         """Clean, deduplicate, align to grid, and compute data quality report."""
         if not observations:
-            msg = "Cannot normalize empty observation list."
-            raise ValueError(msg)
+            raise InsufficientDataError("Cannot normalize empty observation list.")
 
         total_raw = len(observations)
         series_id = expected_series_id or observations[0].series_id
@@ -83,10 +242,9 @@ class Normalizer:
                 continue
             if expected_unit and obs.unit != expected_unit:
                 msg = f"Unit mismatch: expected {expected_unit}, got {obs.unit}"
-                raise ValueError(msg)
+                raise UnitMismatchError(msg)
 
-            dt = obs.observed_at
-            dt = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+            dt = normalize_timestamp(obs.observed_at)
 
             valid_records.append({
                 "timestamp": dt,

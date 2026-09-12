@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from futuris.connectors.synthetic_telemetry import SyntheticTelemetryConnector
@@ -22,6 +22,59 @@ from futuris.storage.repositories import ForecastRepository, OutcomeRepository
 
 if TYPE_CHECKING:
     from futuris.core.engine import ForecastEngine
+
+
+class DataLeakageError(RuntimeError):
+    """Raised when backtest feature extraction or training data contains future observations."""
+    pass
+
+
+def validate_backtest_leakage(
+    data: Any,
+    as_of: datetime,
+) -> None:
+    """Ensure training data and features contain zero future observations beyond as_of."""
+    import pandas as pd
+    as_of_utc = as_of.replace(tzinfo=UTC) if as_of.tzinfo is None else as_of.astimezone(UTC)
+    if isinstance(data, pd.DataFrame):
+        if isinstance(data.index, pd.DatetimeIndex):
+            future_idx = data.index[data.index > as_of_utc]
+            if len(future_idx) > 0:
+                max_future = future_idx.max()
+                raise DataLeakageError(
+                    f"Backtest temporal leakage detected: {len(future_idx)} points exceed as_of ({as_of_utc}), "
+                    f"max future timestamp is {max_future}"
+                )
+        for col in ["timestamp", "observed_at", "as_of"]:
+            if col in data.columns:
+                ts_col = pd.to_datetime(data[col], utc=True)
+                future_rows = ts_col[ts_col > as_of_utc]
+                if len(future_rows) > 0:
+                    raise DataLeakageError(
+                        f"Backtest temporal leakage detected in column '{col}': {len(future_rows)} points exceed as_of ({as_of_utc})"
+                    )
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, datetime):
+                ts = item
+            elif hasattr(item, "observed_at"):
+                ts = item.observed_at
+            elif isinstance(item, dict):
+                ts = item.get("observed_at") or item.get("timestamp")
+            elif hasattr(item, "timestamp") and not callable(item.timestamp):
+                ts = item.timestamp
+            else:
+                ts = item
+
+            if ts:
+                if isinstance(ts, str):
+                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                ts_utc = ts.replace(tzinfo=UTC) if getattr(ts, "tzinfo", None) is None else ts.astimezone(UTC)
+                if ts_utc > as_of_utc:
+                    raise DataLeakageError(
+                        f"Backtest temporal leakage detected: observation timestamp {ts_utc} exceeds as_of {as_of_utc}"
+                    )
+    return True
 
 
 @dataclass

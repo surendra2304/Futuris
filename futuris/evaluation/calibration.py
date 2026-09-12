@@ -1,6 +1,7 @@
 """Calibration analysis: binned reliability, hierarchical shrinkage, and conformal intervals."""
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -101,6 +102,36 @@ class CalibrationAnalyzer:
         curve = self.compute_reliability_curve(predicted_probs, [bool(a) for a in actual_outcomes])
         return curve.expected_calibration_error
 
+    def update_calibration_metrics(
+        self,
+        predicted_probs: list[float],
+        actual_outcomes: list[bool] | list[int],
+    ) -> dict[str, Any]:
+        """Compute full suite of calibration metrics from paired predictions and outcomes."""
+        bool_outcomes = [bool(a) for a in actual_outcomes]
+        if not predicted_probs or not actual_outcomes:
+            return {
+                "ece_score": 0.0,
+                "brier_score": 0.0,
+                "is_calibrated": True,
+                "sample_count": 0,
+            }
+        ece = self.compute_expected_calibration_error(predicted_probs, bool_outcomes)
+        brier = self.compute_brier_score(predicted_probs, bool_outcomes)
+        curve = self.compute_reliability_curve(predicted_probs, bool_outcomes)
+        return {
+            "ece": round(ece, 4),
+            "ece_score": round(ece, 4),
+            "brier_score": round(brier, 4),
+            "is_calibrated": ece < 0.15,
+            "sample_count": len(predicted_probs),
+            "reliability_curve": {
+                "bin_centers": curve.bin_centers,
+                "observed_frequencies": curve.observed_frequencies,
+                "bin_counts": curve.bin_counts,
+            },
+        }
+
     def apply_hierarchical_shrinkage(
         self,
         n_target: int,
@@ -141,3 +172,14 @@ class CalibrationAnalyzer:
         adjusted_lower = float(prediction - conformal_radius)
         adjusted_upper = float(prediction + conformal_radius)
         return adjusted_lower, adjusted_upper
+
+
+def update_calibration_metrics(
+    predicted_probs: list[float],
+    actual_outcomes: list[bool],
+    num_bins: int = 10,
+) -> dict[str, Any]:
+    """Module-level helper to compute and update calibration metrics."""
+    analyzer = CalibrationAnalyzer(num_bins=num_bins)
+    return analyzer.update_calibration_metrics(predicted_probs, actual_outcomes)
+

@@ -11,9 +11,31 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from futuris.core.schemas import Forecast
+
+
+class AuthorizationViolationError(RuntimeError):
+    """Raised when an unauthorized direct execution is attempted from a forecast."""
+    pass
+
+
+DANGEROUS_COMMAND_PATTERNS = [
+    "bash", "sh", "sudo", "rm ", "kubectl", "terraform", "curl", "wget",
+    "docker", "chmod", "iptables", "systemctl", "deploy", "patch_website",
+    "apply_mitigation", "exec", "eval", "reboot", "shutdown",
+]
+
+
+def validate_prediction_authorization_separation(action_or_command: str) -> None:
+    """Ensure prediction cannot directly execute mitigations, system commands, or website changes."""
+    lower_cmd = action_or_command.lower()
+    for pattern in DANGEROUS_COMMAND_PATTERNS:
+        if pattern in lower_cmd:
+            raise AuthorizationViolationError(
+                f"Prediction is not authorization: direct execution of '{pattern}' is strictly forbidden."
+            )
 
 
 class ActionSuggestion(BaseModel):
@@ -25,7 +47,19 @@ class ActionSuggestion(BaseModel):
     rationale: str
     estimated_mitigation_effect: str
     requires_approval: bool = True  # Hardcoded structural safety gate
+    is_actionable_authorization: bool = False
+    executable_commands: list[str] = Field(default_factory=list)
+    prediction_is_not_authorization: bool = True
     recommended_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("executable_commands")
+    @classmethod
+    def validate_no_commands(cls, v: list[str]) -> list[str]:
+        if v:
+            raise AuthorizationViolationError(
+                "Invariant violation: ActionSuggestion cannot contain executable commands."
+            )
+        return v
 
 
 class DecisionImplication(BaseModel):

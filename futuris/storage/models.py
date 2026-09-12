@@ -58,6 +58,19 @@ class ForecastModel(Base):
     drivers: Mapped[list[dict]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), default=list, nullable=False
     )
+    predictive_distribution: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+    )
+    intervals: Mapped[list[dict]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=list, nullable=False
+    )
+    calibration_metrics: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+    )
+    model_metadata: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     evidence_refs: Mapped[list["EvidenceRefModel"]] = relationship(
         "EvidenceRefModel",
         back_populates="forecast",

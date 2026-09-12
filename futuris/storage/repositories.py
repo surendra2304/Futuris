@@ -90,9 +90,21 @@ class ForecastRepository:
             review_at=model.review_at,
             status=ForecastStatus(model.status),
             scenario_id=model.scenario_id,
+            predictive_distribution=getattr(model, "predictive_distribution", {}) or {},
+            intervals=getattr(model, "intervals", []) or [],
+            calibration_metrics=getattr(model, "calibration_metrics", {}) or {},
+            model_metadata=getattr(model, "model_metadata", {}) or {},
+            idempotency_key=getattr(model, "idempotency_key", None),
         )
 
-    async def create(self, forecast: Forecast) -> Forecast:
+    async def get_by_idempotency_key(self, idempotency_key: str) -> Forecast | None:
+        """Find existing forecast by unique idempotency key."""
+        stmt = select(ForecastModel).where(ForecastModel.idempotency_key == idempotency_key)
+        res = await self.session.execute(stmt)
+        record = res.scalar_one_or_none()
+        return self._to_domain(record) if record else None
+
+    async def create(self, forecast: Forecast, idempotency_key: str | None = None) -> Forecast:
         now = datetime.now(UTC)
         evidence_models = [
             EvidenceRefModel(
@@ -134,6 +146,11 @@ class ForecastRepository:
             review_at=forecast.review_at,
             status=forecast.status.value,
             scenario_id=forecast.scenario_id,
+            predictive_distribution=forecast.predictive_distribution or {},
+            intervals=forecast.intervals or [],
+            calibration_metrics=forecast.calibration_metrics or {},
+            model_metadata=forecast.model_metadata or {},
+            idempotency_key=idempotency_key or getattr(forecast, "idempotency_key", None),
             created_at=now,
             updated_at=now,
             evidence_refs=evidence_models,

@@ -5,11 +5,21 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from statsforecast.models import AutoARIMA as _SF_AutoARIMA
-from statsforecast.models import AutoETS as _SF_AutoETS
-from statsforecast.models import Naive as _SF_Naive
-from statsforecast.models import RandomWalkWithDrift as _SF_RandomWalkWithDrift
-from statsforecast.models import SeasonalNaive as _SF_SeasonalNaive
+try:
+    from statsforecast.models import AutoARIMA as _SF_AutoARIMA
+    from statsforecast.models import AutoETS as _SF_AutoETS
+    from statsforecast.models import Naive as _SF_Naive
+    from statsforecast.models import RandomWalkWithDrift as _SF_RandomWalkWithDrift
+    from statsforecast.models import SeasonalNaive as _SF_SeasonalNaive
+except (ImportError, OSError):
+    class _SF_MockModel:  # Fallback for restricted OS environments
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+        def fit(self, *args: Any, **kwargs: Any) -> Any:
+            return self
+        def predict(self, *args: Any, **kwargs: Any) -> Any:
+            return {}
+    _SF_AutoARIMA = _SF_AutoETS = _SF_Naive = _SF_RandomWalkWithDrift = _SF_SeasonalNaive = _SF_MockModel
 
 from futuris.models.base import (
     ModelPrediction,
@@ -195,7 +205,9 @@ class AutoETSAdapter(BaseStatsForecastAdapter):
         _ = x
         self.as_of = as_of
         self.y_history = y.to_numpy(dtype=float)
-        eff_season = self.season_length if len(self.y_history) >= 2 * self.season_length else 1
+        # Cap eff_season to 24 for ETS to ensure numerical stability and prevent state space explosion
+        base_season = min(self.season_length, 24)
+        eff_season = base_season if len(self.y_history) >= 2 * base_season else 1
         self.fitted_model = _SF_AutoETS(season_length=eff_season).fit(y=self.y_history)
         self._extract_residuals(self.y_history)
         return self

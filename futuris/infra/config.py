@@ -80,6 +80,22 @@ class Settings(BaseSettings):
         default="intelx_api",
         description="Live IntelX Intelligence Engine API Key",
     )
+    CORTEX_URL: str = Field(
+        default="https://cortex-qifr.onrender.com",
+        description="Live Cortex URL",
+    )
+    FORGE_URL: str = Field(
+        default="http://localhost:8001",
+        description="Live Forge URL",
+    )
+    SENTINEL_URL: str = Field(
+        default="http://localhost:8003",
+        description="Live Sentinel URL",
+    )
+    FRIDAY_URL: str = Field(
+        default="http://localhost:9000",
+        description="Live Friday URL",
+    )
     FUTURIS_FRIDAY_API_KEY: str = Field(
         default="friday_secret_key_default",
         description="FRIDAY ecosystem API Key",

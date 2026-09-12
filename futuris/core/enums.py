@@ -11,6 +11,9 @@ class ForecastStatus(StrEnum):
     RESOLVED = "resolved"
     EXPIRED = "expired"
     INVALIDATED = "invalidated"
+    INSUFFICIENT_DATA = "insufficient_data"
+    BLOCKED = "blocked"
+    CANCELLED = "cancelled"
 
 
 class ScenarioType(StrEnum):
@@ -53,6 +56,9 @@ class ForecastEventType(StrEnum):
     FORECAST_THRESHOLD_CROSSED = "forecast_threshold_crossed"
     FORECAST_INVALIDATED = "forecast_invalidated"
     FORECAST_OUTCOME_RECORDED = "forecast_outcome_recorded"
+    FORECAST_CANCELLED = "forecast_cancelled"
+    DATA_STALENESS_DETECTED = "data_staleness_detected"
+    INSUFFICIENT_DATA_DETECTED = "insufficient_data_detected"
     MODEL_PROMOTED = "model_promoted"
     MODEL_DEGRADED = "model_degraded"
 
@@ -61,6 +67,7 @@ class ResolutionMethod(StrEnum):
     """Method utilized to verify and record ground-truth forecast outcomes."""
 
     AUTOMATIC = "automatic"
+    AUTOMATED_TELEMETRY = "automatic"
     HUMAN = "human"
     AMBIGUOUS = "ambiguous"
 
@@ -86,3 +93,4 @@ class ConfidenceLevel(StrEnum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+    INSUFFICIENT_DATA = "insufficient_data"
