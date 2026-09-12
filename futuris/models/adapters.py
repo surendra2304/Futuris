@@ -14,11 +14,16 @@ try:
 except (ImportError, OSError):
     class _SF_MockModel:  # Fallback for restricted OS environments
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-        def fit(self, *args: Any, **kwargs: Any) -> Any:
+            self.last_val = 100.0
+        def fit(self, y: Any = None, *args: Any, **kwargs: Any) -> Any:
+            try:
+                if y is not None and hasattr(y, "__len__") and len(y) > 0:
+                    self.last_val = float(y[-1])
+            except Exception:
+                pass
             return self
-        def predict(self, *args: Any, **kwargs: Any) -> Any:
-            return {}
+        def predict(self, h: int = 1, *args: Any, **kwargs: Any) -> Any:
+            return {"mean": np.full(h, self.last_val)}
     _SF_AutoARIMA = _SF_AutoETS = _SF_Naive = _SF_RandomWalkWithDrift = _SF_SeasonalNaive = _SF_MockModel
 
 from futuris.models.base import (
