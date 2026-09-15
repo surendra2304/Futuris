@@ -16,8 +16,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    APP_ENV: Literal["dev", "test", "prod"] = Field(
-        default="dev",
+    APP_ENV: str = Field(
+        default="production",
         description="Application running environment mode.",
     )
     DATABASE_URL: str = Field(
@@ -117,5 +117,5 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-if settings.APP_ENV == "prod" and os.getenv("STRICT_PRODUCTION_SECRETS", "false").lower() == "true":
+if settings.APP_ENV in ("prod", "production") and os.getenv("STRICT_PRODUCTION_SECRETS", "false").lower() == "true":
     settings.validate_production_safety()
