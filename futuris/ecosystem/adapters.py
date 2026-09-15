@@ -245,8 +245,8 @@ class EcosystemAdapter:
             {
                 "name": "Cortex",
                 "role": "Cognitive Reasoning & Task Orchestration Engine",
-                "url": getattr(settings, "CORTEX_URL", "https://cortex-qifr.onrender.com"),
-                "probe_url": f"{getattr(settings, 'CORTEX_URL', 'https://cortex-qifr.onrender.com').rstrip('/')}/health",
+                "url": getattr(settings, "CORTEX_URL", "https://cortex-0m7c.onrender.com"),
+                "probe_url": f"{getattr(settings, 'CORTEX_URL', 'https://cortex-0m7c.onrender.com').rstrip('/')}/health",
                 "headers": {},
                 "capabilities": ["Task Decomposition", "Subagent Execution", "SLA Guardrails"],
             },

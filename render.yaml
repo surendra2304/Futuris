@@ -46,7 +46,7 @@ services:
       - key: INTELX_API_KEY
         value: "intelx_api"
       - key: CORTEX_URL
-        value: "https://cortex-qifr.onrender.com"
+        value: "https://cortex-0m7c.onrender.com"
       - key: CORTEX_API_KEY
         value: "cortex_api"
       - key: FORGE_URL

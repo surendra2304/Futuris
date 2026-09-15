@@ -81,7 +81,7 @@ class Settings(BaseSettings):
         description="Live IntelX Intelligence Engine API Key",
     )
     CORTEX_URL: str = Field(
-        default="https://cortex-qifr.onrender.com",
+        default="https://cortex-0m7c.onrender.com",
         description="Live Cortex URL",
     )
     FORGE_URL: str = Field(
