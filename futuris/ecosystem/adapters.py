@@ -253,8 +253,8 @@ class EcosystemAdapter:
             {
                 "name": "Forge",
                 "role": "Autonomous CI/CD & Code Generation Worktree",
-                "url": getattr(settings, "FORGE_URL", "https://forge-u98k.onrender.com"),
-                "probe_url": f"{getattr(settings, 'FORGE_URL', 'https://forge-u98k.onrender.com').rstrip('/')}/health",
+                "url": getattr(settings, "FORGE_URL", "https://forge-e9kl.onrender.com"),
+                "probe_url": f"{getattr(settings, 'FORGE_URL', 'https://forge-e9kl.onrender.com').rstrip('/')}/health",
                 "headers": {},
                 "capabilities": ["Automated Testing", "Canary Deployment", "Regression Detection"],
             },
