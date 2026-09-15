@@ -1,4 +1,4 @@
-﻿services:
+services:
   - type: web
     name: futuris
     env: docker
@@ -13,7 +13,7 @@
       - key: ENVIRONMENT
         value: "production"
       - key: APP_ENV
-        value: "production"
+        value: "prod"
       - key: DATABASE_URL
         value: "sqlite+aiosqlite:////app/data/futuris.db"
       - key: OBJECT_STORE_PATH
