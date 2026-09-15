@@ -1,40 +1,59 @@
-services:
+﻿services:
   - type: web
-    name: friday-futuris
+    name: futuris
     env: docker
     plan: free
     region: singapore
     healthCheckPath: /health
     envVars:
       - key: PORT
-        value: "10000"
+        value: "8000"
       - key: HOST
         value: "0.0.0.0"
       - key: ENVIRONMENT
         value: "production"
-      - key: LLM_API_KEY
-        sync: false
-      - key: INTELX_URL
-        sync: false
-      - key: INFERENCE_URL
-        sync: false
-      - key: INTELX_API_KEY
-        sync: false
+      - key: APP_ENV
+        value: "production"
       - key: DATABASE_URL
-        sync: false
-      - key: MEMORA_API_KEY
-        sync: false
+        value: "sqlite+aiosqlite:////app/data/futuris.db"
+      - key: OBJECT_STORE_PATH
+        value: "/app/data/storage"
       - key: API_KEYS_ENABLED
-        sync: false
+        value: "true"
       - key: FUTURIS_API_KEY
-        sync: false
-      - key: STRATEX_API_KEY
-        sync: false
-      - key: MEMORA_URL
-        sync: false
+        value: "futuris_api"
+      - key: LLM_PROVIDER
+        value: "none"
+      # Live Mesh Interconnects
+      - key: FRIDAY_URL
+        value: "https://friday-zw59.onrender.com"
+      - key: FRIDAY_API_KEY
+        value: "friday_api"
+      - key: INFERENCE_URL
+        value: "https://inference-r1sn.onrender.com"
       - key: INFERENCE_API_KEY
-        sync: false
-      - key: FUTURIS_FRIDAY_API_KEY
-        sync: false
+        value: "inference_api"
       - key: STRATEX_URL
-        sync: false
+        value: "https://stratex-8wj1.onrender.com"
+      - key: STRATEX_API_KEY
+        value: "stratex_api"
+      - key: MEMORA_URL
+        value: "https://memora-cavc.onrender.com"
+      - key: MEMORA_API_KEY
+        value: "memora_api"
+      - key: INTELX_URL
+        value: "https://intelx-3cz1.onrender.com"
+      - key: INTELX_API_KEY
+        value: "intelx_api"
+      - key: CORTEX_URL
+        value: "https://cortex-qifr.onrender.com"
+      - key: CORTEX_API_KEY
+        value: "cortex_api"
+      - key: FORGE_URL
+        value: "http://localhost:8001"
+      - key: FORGE_API_KEY
+        value: "forge_api"
+      - key: SENTINEL_URL
+        value: "http://localhost:8003"
+      - key: SENTINEL_API_KEY
+        value: "sentinel_api"
