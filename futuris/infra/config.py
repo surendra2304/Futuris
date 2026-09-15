@@ -85,7 +85,7 @@ class Settings(BaseSettings):
         description="Live Cortex URL",
     )
     FORGE_URL: str = Field(
-        default="http://localhost:8001",
+        default="https://forge-u98k.onrender.com",
         description="Live Forge URL",
     )
     SENTINEL_URL: str = Field(
