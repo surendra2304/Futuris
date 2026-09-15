@@ -73,7 +73,7 @@ class Settings(BaseSettings):
         description="Live Stratex Trading Bot API Key",
     )
     INTELX_URL: str = Field(
-        default="https://intelx-3cz1.onrender.com",
+        default="https://intelx-mygl.onrender.com",
         description="Live IntelX Intelligence Engine URL",
     )
     INTELX_API_KEY: str = Field(
