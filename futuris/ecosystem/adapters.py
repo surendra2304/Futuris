@@ -237,8 +237,8 @@ class EcosystemAdapter:
             {
                 "name": "Sentinel",
                 "role": "Cybersecurity & Governance Defense Shield",
-                "url": getattr(settings, "SENTINEL_URL", "http://localhost:8003"),
-                "probe_url": f"{getattr(settings, 'SENTINEL_URL', 'http://localhost:8003').rstrip('/')}/health",
+                "url": getattr(settings, "SENTINEL_URL", "https://sentinel-a861.onrender.com"),
+                "probe_url": f"{getattr(settings, 'SENTINEL_URL', 'https://sentinel-a861.onrender.com').rstrip('/')}/health",
                 "headers": {},
                 "capabilities": ["Policy Verification", "Command Gatekeeper", "Audit Logging"],
             },

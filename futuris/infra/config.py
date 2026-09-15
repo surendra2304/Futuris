@@ -89,7 +89,7 @@ class Settings(BaseSettings):
         description="Live Forge URL",
     )
     SENTINEL_URL: str = Field(
-        default="http://localhost:8003",
+        default="https://sentinel-a861.onrender.com",
         description="Live Sentinel URL",
     )
     FRIDAY_URL: str = Field(
