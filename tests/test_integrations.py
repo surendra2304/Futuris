@@ -99,10 +99,12 @@ async def test_friday_client_sdk_integration():
     )
     async with session_factory() as session:
 
+        from futuris.infra.auth import AuthUser, get_current_user
         async def _override_get_db():
             yield session
 
         app.dependency_overrides[get_db_session] = _override_get_db
+        app.dependency_overrides[get_current_user] = lambda: AuthUser(label="test", role="admin")
         transport = httpx.ASGITransport(app=app)
         client = FridayClient(base_url="http://testserver", transport=transport)
 

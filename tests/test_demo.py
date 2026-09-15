@@ -46,10 +46,12 @@ async def test_demo_pipeline_e2e_execution(demo_db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_demo_api_endpoints_return_seeded_data(demo_db_session: AsyncSession):
     """Verify that after seeding, public API endpoints serve live forecast, scenarios, and calib."""
+    from futuris.infra.auth import AuthUser, get_current_user
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield demo_db_session
 
     app.dependency_overrides[get_db_session] = _override_get_db
+    app.dependency_overrides[get_current_user] = lambda: AuthUser(label="test", role="admin")
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
