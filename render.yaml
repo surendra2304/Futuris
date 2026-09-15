@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: friday-futuris
+    env: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: HOST
+        value: "0.0.0.0"
+      - key: ENVIRONMENT
+        value: "production"
+      - key: LLM_API_KEY
+        sync: false
+      - key: INTELX_URL
+        sync: false
+      - key: INFERENCE_URL
+        sync: false
+      - key: INTELX_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: MEMORA_API_KEY
+        sync: false
+      - key: API_KEYS_ENABLED
+        sync: false
+      - key: FUTURIS_API_KEY
+        sync: false
+      - key: STRATEX_API_KEY
+        sync: false
+      - key: MEMORA_URL
+        sync: false
+      - key: INFERENCE_API_KEY
+        sync: false
+      - key: FUTURIS_FRIDAY_API_KEY
+        sync: false
+      - key: STRATEX_URL
+        sync: false
