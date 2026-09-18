@@ -70,7 +70,7 @@
 
 1. **Master Diary Index**: Updated `FUTURIS_DIARY.md` with Day 5 Comprehensive Codebase Audit entry.
 2. **Daily Log**: Authored `diary/2026-09-01.md` strictly following the required line counts, summary bullets, and first-person voice conventions.
-3. **System Manifest Alignment**: Confirmed `SYSTEM_MANIFEST.md` matches live production topology on Render (`https://futuris-x4f4.onrender.com`).
+3. **System Manifest Alignment**: Confirmed `SYSTEM_MANIFEST.md` matches live production topology on Render (`https://futuris-th6f.onrender.com`).
 
 ---
 

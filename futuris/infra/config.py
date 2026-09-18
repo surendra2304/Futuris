@@ -49,7 +49,7 @@ class Settings(BaseSettings):
         description="Whether API key authentication is enforced on API endpoints (always True).",
     )
     INFERENCE_URL: str = Field(
-        default="https://inference-3i2b.onrender.com",
+        default="https://inference-r1sn.onrender.com",
         description="Live Inference Gateway URL",
     )
     INFERENCE_API_KEY: str = Field(
@@ -57,7 +57,7 @@ class Settings(BaseSettings):
         description="Live Inference Gateway API Key",
     )
     MEMORA_URL: str = Field(
-        default="https://memora-9zr9.onrender.com",
+        default="https://memora-cavc.onrender.com",
         description="Live Memora Cloud Memory URL",
     )
     MEMORA_API_KEY: str = Field(
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
         description="Live Memora Cloud Memory API Key",
     )
     STRATEX_URL: str = Field(
-        default="https://stratex-ucjz.onrender.com",
+        default="https://stratex-8wj1.onrender.com",
         description="Live Stratex Trading Bot URL",
     )
     STRATEX_API_KEY: str = Field(
@@ -93,7 +93,7 @@ class Settings(BaseSettings):
         description="Live Sentinel URL",
     )
     FRIDAY_URL: str = Field(
-        default="http://localhost:9000",
+        default="https://friday-zw59.onrender.com",
         description="Live Friday URL",
     )
     FUTURIS_FRIDAY_API_KEY: str = Field(

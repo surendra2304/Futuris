@@ -261,8 +261,8 @@ class EcosystemAdapter:
             {
                 "name": "FRIDAY",
                 "role": "Central Desktop Multimodal OS & Orchestrator",
-                "url": getattr(settings, "FRIDAY_URL", "http://localhost:9000"),
-                "probe_url": f"{getattr(settings, 'FRIDAY_URL', 'http://localhost:9000').rstrip('/')}/health",
+                "url": getattr(settings, "FRIDAY_URL", "https://friday-zw59.onrender.com"),
+                "probe_url": f"{getattr(settings, 'FRIDAY_URL', 'https://friday-zw59.onrender.com').rstrip('/')}/health",
                 "headers": {},
                 "capabilities": ["Master Delegation", "Voice Control", "Cross-Agent Routing"],
             },

@@ -20,7 +20,7 @@ test_client = TestClient(app)
 
 def mock_post(url, **kwargs):
     # Route through fastapi TestClient
-    path = url.replace("https://futuris-x4f4.onrender.com", "")
+    path = url.replace("https://futuris-th6f.onrender.com", "")
     return test_client.post(path, **kwargs)
 
 with patch("requests.post", side_effect=mock_post):
