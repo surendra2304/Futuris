@@ -64,22 +64,6 @@ class IntelXContextInjector:
             start=start_time.isoformat(),
         )
 
-        import sys
-
-        if "pytest" in sys.modules and self.transport is None:
-            is_market = any(k in asset_or_sector.lower() for k in ["btc", "eth", "crypto", "trading", "market", "usdt"])
-            return [
-                IntelXResearchReport(
-                    asset_or_sector=asset_or_sector,
-                    published_at=ref_time - timedelta(days=1),
-                    summary=f"IntelX market intelligence for {asset_or_sector}: Positive spot accumulation and volatility compression." if is_market else f"IntelX test baseline research for {asset_or_sector}.",
-                    sentiment_score=0.45 if is_market else 0.25,
-                    volatility_impact_factor=1.35 if is_market else 1.20,
-                    key_findings=["Spot market liquidity healthy", "Institutional ETF inflows trending positive"] if is_market else ["Test environment nominal", "Traffic baseline verified"],
-                    tags=["intelx", "market" if is_market else "test_baseline"],
-                )
-            ]
-
         try:
             async with httpx.AsyncClient(
                 transport=self.transport, timeout=self.timeout_seconds
@@ -186,36 +170,13 @@ class IntelXContextInjector:
 
         except Exception as exc:
             logger.warning(
-                "intelx_fetch_failed_using_fallback",
+                "intelx_fetch_failed_no_evidence_returned",
                 target=asset_or_sector,
-                error=str(exc),
+                error=type(exc).__name__,
             )
-
-        # Baseline fallback report when external service has zero findings or during cold start
-        is_checkout = "checkout" in asset_or_sector.lower()
-        is_trading = "trading" in asset_or_sector.lower() or "btc" in asset_or_sector.lower()
-
-        sentiment = 0.20 if is_checkout else 0.10 if is_trading else 0.05
-        vol_factor = 1.15 if is_checkout else 1.25 if is_trading else 1.05
-        findings = (
-            ["Traffic diurnal cycles steady", "Promotion uplift expected"]
-            if is_checkout
-            else ["Market liquidity stable", "Funding rate neutral"]
-            if is_trading
-            else ["System utilization nominal"]
-        )
-
-        return [
-            IntelXResearchReport(
-                asset_or_sector=asset_or_sector,
-                published_at=ref_time - timedelta(days=1),
-                summary=f"IntelX baseline research for {asset_or_sector}.",
-                sentiment_score=sentiment,
-                volatility_impact_factor=vol_factor,
-                key_findings=findings,
-                tags=["intelx", "baseline"],
-            )
-        ]
+        # Missing or empty upstream data is not market/news evidence. Callers can
+        # continue with their primary data and receive neutral IntelX modifiers.
+        return []
 
     def compute_exogenous_adjustments(
         self,

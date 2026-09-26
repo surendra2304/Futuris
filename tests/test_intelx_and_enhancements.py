@@ -53,6 +53,28 @@ async def test_intelx_context_injection_and_adjustments():
     assert adj["volatility_multiplier"] == 1.30
 
 
+@pytest.mark.asyncio
+async def test_intelx_unavailable_returns_no_invented_research():
+    """An unavailable IntelX service must not become fabricated sentiment evidence."""
+    async def _unavailable(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    injector = IntelXContextInjector(
+        base_url="http://intelx.local",
+        api_key="intelx_key",
+        transport=httpx.MockTransport(_unavailable),
+    )
+
+    reports = await injector.fetch_recent_research("BTCUSDT")
+
+    assert reports == []
+    assert injector.compute_exogenous_adjustments(reports) == {
+        "sentiment_multiplier": 1.0,
+        "volatility_multiplier": 1.0,
+        "confidence_penalty": 0.0,
+    }
+
+
 def test_ai_universe_model_enhancement_and_narrative():
     """Verify AI-Universe model enhancer adjusts confidence intervals and formats narrative."""
     enhancer = AIUniverseModelEnhancer()
