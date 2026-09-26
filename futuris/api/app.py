@@ -119,11 +119,8 @@ app.include_router(webhooks_router, prefix="/api/v1")
 @app.post("/v1/task/execute", tags=["Universal Task Protocol"])
 @app.post("/api/v1/task/execute", tags=["Universal Task Protocol"])
 async def execute_task(body: dict):
-    """Universal Task Protocol endpoint for Futuris with prediction/authorization separation."""
-    import time
+    """Reject generic tasks until they can be routed to a real evidence-backed handler."""
     from fastapi import HTTPException, status
-    t0 = time.time()
-    task_id = body.get("task_id", f"futuris_{int(time.time())}")
     action = body.get("action", "forecast")
     payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
 
@@ -153,52 +150,14 @@ async def execute_task(body: dict):
                 "system commands, or website changes. It only provides calibrated forecasts."
             ),
         )
-
-    target = payload.get("target") or payload.get("metric") or payload.get("prompt") or "Macro forecast target"
-
-    lat = int((time.time() - t0) * 1000)
-    summary = f"Futuris calibrated predictive engine processed task '{action}' for target '{target}'."
-    return {
-        "task_id": task_id,
-        "source_agent": "futuris",
-        "target_agent": "friday",
-        "status": "SUCCESS",
-        "action": action,
-        "result": {
-            "target": target,
-            "prediction": 100.0,
-            "ece_score": 0.042,
-            "brier_score": 0.084,
-            "calibrated": True,
-            "trend": "improving",
-            "predictive_distribution": {
-                "p10": 82.5,
-                "p50": 100.0,
-                "p90": 118.2,
-                "exceedance_probability": 0.12,
-            },
-            "intervals": {
-                "80%": [87.1, 112.9],
-                "90%": [82.5, 118.2],
-                "95%": [78.4, 122.6],
-            },
-            "calibration_metrics": {
-                "ece": 0.042,
-                "brier_score": 0.084,
-                "samples": 200,
-                "reliability_curve": [(0.1, 0.11), (0.5, 0.49), (0.9, 0.88)],
-            },
-            "model_metadata": {
-                "model_version": "auto_ets@v1",
-                "framework": "statsforecast",
-                "calibration_method": "isotonic_regression",
-            },
-        },
-        "summary": summary,
-        "prediction_is_not_authorization": True,
-        "executable_commands": [],
-        "execution_time_ms": lat,
-    }
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=(
+            "The generic task endpoint has no evidence-backed handler configured. "
+            "No forecast was run and no result was produced. Use the authenticated "
+            "forecast API with timestamped telemetry."
+        ),
+    )
 
 from starlette.exceptions import HTTPException
 from starlette.types import Scope

@@ -369,6 +369,20 @@ async def test_prediction_is_not_authorization_invariant(auth_headers):
         assert bad_task.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_universal_task_endpoint_does_not_report_a_fabricated_forecast():
+    """Generic task requests must not return hard-coded predictions as successful work."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/v1/task/execute",
+            json={"task_id": "honesty-check", "action": "forecast", "payload": {"target": "BTCUSDT"}},
+        )
+
+    assert response.status_code == 501
+    assert "No forecast was run" in response.json()["error"]["message"]
+
+
 # ── TEST 8: Timezone Normalization and Error Handling ──
 def test_timezone_normalization_and_error_handling():
     """Verify timestamps across various formats are normalized to UTC or raise errors."""
