@@ -43,12 +43,13 @@ async def consume_memora_events_once(client=memora_client) -> int:
             if not isinstance(payload, dict):
                 raise RuntimeError("IntelX event payload is malformed; cursor was not advanced")
             async with async_session_factory() as session:
-                existing = await session.get(IntelXNoticeModel, str(event.get("event_id", event_id)))
+                stable_event_id = str(event.get("event_id", event_id))
+                existing = await session.get(IntelXNoticeModel, stable_event_id)
                 if existing is None:
                     await _persist_notice_to_memora(event, payload)
                     session.add(
                         IntelXNoticeModel(
-                            event_id=str(event.get("event_id", event_id)),
+                            event_id=stable_event_id,
                             source_agent=str(payload.get("source_agent", "intelx"))[:64],
                             payload=payload,
                         )
@@ -79,9 +80,13 @@ async def _persist_notice_to_memora(event: dict[str, Any], payload: dict[str, An
     if isinstance(payload.get("source_url"), str):
         evidence["source_url"] = payload["source_url"][:2048]
     if isinstance(payload.get("sources"), list):
-        evidence["sources"] = [item[:2048] for item in payload["sources"][:20] if isinstance(item, str)]
+        evidence["sources"] = [
+            item[:2048] for item in payload["sources"][:20] if isinstance(item, str)
+        ]
     if isinstance(payload.get("topics"), list):
-        evidence["topics"] = [item[:100] for item in payload["topics"][:50] if isinstance(item, str)]
+        evidence["topics"] = [
+            item[:100] for item in payload["topics"][:50] if isinstance(item, str)
+        ]
     if isinstance(payload.get("relevance"), (int, float)):
         evidence["relevance"] = payload["relevance"]
     if isinstance(payload.get("published_at"), str):

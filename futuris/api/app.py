@@ -26,8 +26,8 @@ from futuris.api.routers.predictions import router as predictions_router
 from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.api.routers.webhooks import router as webhooks_router
 from futuris.demo.seed import DemoSeeder
-from futuris.infra.logging import configure_logging, get_logger
 from futuris.infra.config import settings
+from futuris.infra.logging import configure_logging, get_logger
 from futuris.infra.metrics import metrics_endpoint
 from futuris.storage.db import async_session_factory, engine
 from futuris.storage.models import Base, ForecastModel

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-import pytest
 import httpx
+import pytest
 
 from futuris.integrations.memora_event_consumer import (
     CONSUMER_ID,
-    consume_memora_events_once,
     _persist_notice_to_memora,
+    consume_memora_events_once,
 )
 
 
@@ -26,9 +26,12 @@ class FakeMemora:
     def poll_events(self, agent, after_id, limit):
         assert agent == "futuris"
         assert after_id == 0
+        assert limit == 100
         return {"status": "ok", "events": self.events}
 
     def acknowledge_event(self, agent, event_id, consumer_id):
+        assert agent == "futuris"
+        assert consumer_id == CONSUMER_ID
         self.acks.append(event_id)
         if self.order is not None:
             self.order.append("ack")
@@ -79,13 +82,18 @@ async def test_intelx_notice_is_saved_before_ack_and_duplicate_is_idempotent(mon
     async def persist_notice(_event, _payload):
         order.append("memora_commit")
 
-    monkeypatch.setattr("futuris.integrations.memora_event_consumer._persist_notice_to_memora", persist_notice)
+    monkeypatch.setattr(
+        "futuris.integrations.memora_event_consumer._persist_notice_to_memora",
+        persist_notice,
+    )
 
     @asynccontextmanager
     async def sessions():
         yield FakeSession(rows, order=order)
 
-    monkeypatch.setattr("futuris.integrations.memora_event_consumer.async_session_factory", sessions)
+    monkeypatch.setattr(
+        "futuris.integrations.memora_event_consumer.async_session_factory", sessions
+    )
     assert await consume_memora_events_once(fake_client) == 1
     assert list(rows) == ["intelx-run-4-all"]
     assert fake_client.acks == [4]
@@ -113,13 +121,18 @@ async def test_persistence_failure_does_not_ack_or_advance(monkeypatch):
     async def persist_notice(_event, _payload):
         memora_writes.append("persisted")
 
-    monkeypatch.setattr("futuris.integrations.memora_event_consumer._persist_notice_to_memora", persist_notice)
+    monkeypatch.setattr(
+        "futuris.integrations.memora_event_consumer._persist_notice_to_memora",
+        persist_notice,
+    )
 
     @asynccontextmanager
     async def sessions():
         yield FakeSession(rows, fail_commit=True)
 
-    monkeypatch.setattr("futuris.integrations.memora_event_consumer.async_session_factory", sessions)
+    monkeypatch.setattr(
+        "futuris.integrations.memora_event_consumer.async_session_factory", sessions
+    )
     with pytest.raises(RuntimeError, match="database unavailable"):
         await consume_memora_events_once(fake_client)
     assert memora_writes == ["persisted"]
@@ -136,7 +149,9 @@ async def test_other_event_is_skipped_but_acknowledged_in_order(monkeypatch):
     async def sessions():
         yield FakeSession({})
 
-    monkeypatch.setattr("futuris.integrations.memora_event_consumer.async_session_factory", sessions)
+    monkeypatch.setattr(
+        "futuris.integrations.memora_event_consumer.async_session_factory", sessions
+    )
     assert await consume_memora_events_once(fake_client) == 1
     assert fake_client.acks == [6]
 
