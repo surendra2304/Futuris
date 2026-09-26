@@ -3,12 +3,13 @@ import { Forecast, Outcome, CalibrationCurve, BacktestRun, EcosystemOverview, Un
 const API_BASE = '/v1';
 
 function getHeaders(): HeadersInit {
-  const apiKey = (typeof window !== 'undefined' && localStorage.getItem('futuris_api_key')) || 'futuris_api';
-  return {
+  const headers: Record<string, string> = {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
-    'X-API-Key': apiKey,
   };
+  const apiKey = typeof window !== 'undefined' ? localStorage.getItem('futuris_api_key') : null;
+  if (apiKey) headers['X-API-Key'] = apiKey;
+  return headers;
 }
 
 async function handleResponse<T>(res: Response, fallbackMsg: string): Promise<T> {

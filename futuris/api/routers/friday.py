@@ -1,4 +1,5 @@
 import time
+import hmac
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -55,10 +56,8 @@ async def verify_friday_auth(
     """Verify incoming FRIDAY API Key against FUTURIS_FRIDAY_API_KEY config."""
     import os
 
-    expected_key = os.getenv("FUTURIS_FRIDAY_API_KEY") or getattr(
-        settings, "FUTURIS_FRIDAY_API_KEY", "friday_secret_key_default"
-    )
-    admin_key = os.getenv("FUTURIS_API_KEY") or getattr(settings, "FUTURIS_API_KEY", None)
+    expected_key = os.getenv("FUTURIS_FRIDAY_API_KEY") or settings.FUTURIS_FRIDAY_API_KEY
+    admin_key = os.getenv("FUTURIS_API_KEY") or settings.FUTURIS_API_KEY
     auth_key = x_api_key
     if not auth_key and authorization:
         if authorization.startswith("Bearer "):
@@ -66,7 +65,16 @@ async def verify_friday_auth(
         else:
             auth_key = authorization.strip()
 
-    if not auth_key or (auth_key != expected_key and auth_key != admin_key):
+    if not expected_key or len(expected_key) < 32:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="FRIDAY service authentication is not configured.",
+        )
+    is_valid = bool(auth_key) and (
+        hmac.compare_digest(auth_key, expected_key)
+        or bool(admin_key and hmac.compare_digest(auth_key, admin_key))
+    )
+    if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing FRIDAY authentication credentials.",

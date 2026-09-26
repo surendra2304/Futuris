@@ -73,7 +73,7 @@ async def get_current_user(
     )
 
     # Master API key check (e.g. FUTURIS_API_KEY from environment)
-    if clean_key == settings.FUTURIS_API_KEY:
+    if settings.FUTURIS_API_KEY and clean_key == settings.FUTURIS_API_KEY:
         return AuthUser(
             label="master_admin",
             role="admin",

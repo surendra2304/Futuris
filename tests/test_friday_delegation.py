@@ -31,7 +31,8 @@ async def test_friday_forecast_delegation_authorized(
     friday_test_db: AsyncSession, monkeypatch
 ):
     """Verify POST /v1/friday/forecast receives delegation and returns response."""
-    monkeypatch.setenv("FUTURIS_FRIDAY_API_KEY", "friday_test_key_123")
+    friday_key = "friday_test_key_1234567890abcdef012345"
+    monkeypatch.setenv("FUTURIS_FRIDAY_API_KEY", friday_key)
 
     async def _override_get_db():
         yield friday_test_db
@@ -56,7 +57,7 @@ async def test_friday_forecast_delegation_authorized(
         # 2. Test authorized request
         resp = await client.post(
             "/v1/friday/forecast",
-            headers={"X-API-Key": "friday_test_key_123"},
+            headers={"X-API-Key": friday_key},
             json={
                 "friday_request_id": "req_101",
                 "target": "service:checkout:capacity_exceedance_24h",
@@ -78,7 +79,7 @@ async def test_friday_forecast_delegation_authorized(
         forecast_id = data["futuris_forecast_id"]
         scen_resp = await client.post(
             "/v1/friday/scenario",
-            headers={"X-API-Key": "friday_test_key_123"},
+            headers={"X-API-Key": friday_key},
             json={
                 "question": "What if traffic doubles?",
                 "base_forecast_id": forecast_id,
@@ -97,7 +98,7 @@ async def test_friday_forecast_delegation_authorized(
         # 4. List forecasts GET /v1/friday/forecasts
         list_resp = await client.get(
             "/v1/friday/forecasts",
-            headers={"X-API-Key": "friday_test_key_123"},
+            headers={"X-API-Key": friday_key},
         )
         assert list_resp.status_code == 200
         assert len(list_resp.json()) >= 1
@@ -105,7 +106,7 @@ async def test_friday_forecast_delegation_authorized(
         # 5. Get FRIDAY calibration report GET /v1/friday/calibration
         cal_resp = await client.get(
             "/v1/friday/calibration",
-            headers={"X-API-Key": "friday_test_key_123"},
+            headers={"X-API-Key": friday_key},
         )
         assert cal_resp.status_code == 200
         cal_data = cal_resp.json()

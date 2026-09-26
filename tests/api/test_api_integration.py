@@ -34,15 +34,17 @@ async def api_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def client(api_db_session: AsyncSession) -> AsyncGenerator[httpx.AsyncClient, None]:
+async def client(api_db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[httpx.AsyncClient, None]:
     """Provide httpx async client wired to test app with overridden DB session."""
 
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield api_db_session
 
     app.dependency_overrides[get_db_session] = _override_get_db
+    from futuris.infra.config import settings
+    monkeypatch.setattr(settings, "FUTURIS_API_KEY", "futuris_master_test_key_0123456789abcdef")
     transport = httpx.ASGITransport(app=app)
-    headers = {"X-API-Key": "futuris_api"}
+    headers = {"X-API-Key": "futuris_master_test_key_0123456789abcdef"}
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver", headers=headers) as ac:
         yield ac
     app.dependency_overrides.clear()

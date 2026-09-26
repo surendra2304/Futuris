@@ -123,6 +123,9 @@ class EcosystemAdapter:
 
     async def publish_memora_candidate(self, candidate: MemoraMemoryCandidate) -> bool:
         """Publish approved memory candidate to Memora cloud memory under futuris/forecasts namespace."""
+        if not settings.MEMORA_API_KEY:
+            logger.error("memora_publish_blocked_missing_agent_credential")
+            return False
         url = f"{settings.MEMORA_URL.rstrip('/')}/v1/memories"
         headers = {
             "Authorization": f"Bearer {settings.MEMORA_API_KEY}",
@@ -131,9 +134,9 @@ class EcosystemAdapter:
         }
         body = {
             "content_text": candidate.content,
-            "target_namespace_path": "futuris/forecasts",
+            "target_namespace_path": "memora://futuris/forecasts",
             "memory_type": "episodic",
-            "source": "futuris",
+            "source": "agent:futuris",
             "confidence": 0.90,
             "importance": 0.80,
             "provenance": {
@@ -146,7 +149,10 @@ class EcosystemAdapter:
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(url, json=body, headers=headers)
-                return resp.status_code in {200, 201, 202}
+                if resp.status_code in {200, 201}:
+                    return True
+                logger.warning("memora_publish_rejected", status_code=resp.status_code)
+                return False
         except Exception as exc:
             logger.warning("memora_publish_failed", error=str(exc))
             return False

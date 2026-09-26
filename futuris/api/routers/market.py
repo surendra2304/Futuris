@@ -257,7 +257,7 @@ async def _generate_market_prediction(
             f"Regime={regime}, Direction={predicted_dir}, Volatility_Prob={vol_prob:.1%}, "
             f"Drawdown_Risk={dd_prob:.1%}, Confidence={confidence_score:.2f}. Rationale: {rationale}"
         )
-        await ecosystem_adapter.publish_market_forecast_to_memora(
+        memory_stored = await ecosystem_adapter.publish_market_forecast_to_memora(
             symbol=clean_sym,
             content=memora_content,
             metadata={
@@ -268,8 +268,10 @@ async def _generate_market_prediction(
                 "confidence": confidence_score,
             },
         )
+        if not memory_stored:
+            logger.warning("memora_market_dispatch_failed", forecast_id=str(forecast_id), symbol=clean_sym)
     except Exception as exc:
-        logger.debug("memora_market_dispatch_skipped", error=str(exc))
+        logger.warning("memora_market_dispatch_failed", forecast_id=str(forecast_id), error=type(exc).__name__)
 
     # 9. Outbound Notify to Stratex
     try:

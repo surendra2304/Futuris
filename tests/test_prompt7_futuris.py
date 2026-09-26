@@ -78,9 +78,9 @@ async def futuris_test_db():
 @pytest.fixture
 def auth_headers(monkeypatch) -> dict[str, str]:
     """Provide authorized headers with mock FRIDAY API key."""
-    api_key = "friday_secret_master_test_key"
+    api_key = "friday_secret_master_test_key_1234567890"
     monkeypatch.setenv("FUTURIS_FRIDAY_API_KEY", api_key)
-    monkeypatch.setenv("FUTURIS_API_KEY", "futuris_master_test_key")
+    monkeypatch.setenv("FUTURIS_API_KEY", "futuris_master_test_key_1234567890abcdef")
     return {"X-API-Key": api_key}
 
 

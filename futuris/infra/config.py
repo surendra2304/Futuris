@@ -3,7 +3,7 @@
 import os
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,8 +40,8 @@ class Settings(BaseSettings):
         default="INFO",
         description="Logging level threshold.",
     )
-    FUTURIS_API_KEY: str = Field(
-        default="futuris_api",
+    FUTURIS_API_KEY: str | None = Field(
+        default=None,
         description="Master API authentication key for Futuris",
     )
     API_KEYS_ENABLED: bool = Field(
@@ -52,32 +52,33 @@ class Settings(BaseSettings):
         default="https://inference-r1sn.onrender.com",
         description="Live Inference Gateway URL",
     )
-    INFERENCE_API_KEY: str = Field(
-        default="inference_api",
+    INFERENCE_API_KEY: str | None = Field(
+        default=None,
         description="Live Inference Gateway API Key",
     )
     MEMORA_URL: str = Field(
         default="https://memora-cavc.onrender.com",
         description="Live Memora Cloud Memory URL",
     )
-    MEMORA_API_KEY: str = Field(
-        default="memora_api",
+    MEMORA_API_KEY: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FUTURIS_MEMORA_API_KEY", "FUTURIS_API_KEY", "MEMORA_API_KEY"),
         description="Live Memora Cloud Memory API Key",
     )
     STRATEX_URL: str = Field(
         default="https://stratex-8wj1.onrender.com",
         description="Live Stratex Trading Bot URL",
     )
-    STRATEX_API_KEY: str = Field(
-        default="stratex_api",
+    STRATEX_API_KEY: str | None = Field(
+        default=None,
         description="Live Stratex Trading Bot API Key",
     )
     INTELX_URL: str = Field(
         default="https://intelx-mygl.onrender.com",
         description="Live IntelX Intelligence Engine URL",
     )
-    INTELX_API_KEY: str = Field(
-        default="intelx_api",
+    INTELX_API_KEY: str | None = Field(
+        default=None,
         description="Live IntelX Intelligence Engine API Key",
     )
     CORTEX_URL: str = Field(
@@ -96,8 +97,8 @@ class Settings(BaseSettings):
         default="https://friday-zw59.onrender.com",
         description="Live Friday URL",
     )
-    FUTURIS_FRIDAY_API_KEY: str = Field(
-        default="friday_secret_key_default",
+    FUTURIS_FRIDAY_API_KEY: str | None = Field(
+        default=None,
         description="FRIDAY ecosystem API Key",
     )
 
