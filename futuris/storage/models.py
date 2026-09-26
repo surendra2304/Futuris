@@ -160,6 +160,21 @@ class ForecastEventModel(Base):
     )
 
 
+class IntelXNoticeModel(Base):
+    """Durable advisory copy of an IntelX event received through Memora."""
+
+    __tablename__ = "intelx_notices"
+
+    event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_agent: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False, index=True
+    )
+
+
 class ObservationModel(Base):
     """Ingested operational telemetry observations."""
 

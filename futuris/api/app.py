@@ -27,6 +27,7 @@ from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.api.routers.webhooks import router as webhooks_router
 from futuris.demo.seed import DemoSeeder
 from futuris.infra.logging import configure_logging, get_logger
+from futuris.infra.config import settings
 from futuris.infra.metrics import metrics_endpoint
 from futuris.storage.db import async_session_factory, engine
 from futuris.storage.models import Base, ForecastModel
@@ -47,7 +48,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("startup_init_failed", error=str(exc))
 
+    background_tasks: list[asyncio.Task] = []
     if "pytest" not in sys.modules:
+        from futuris.integrations.memora_event_consumer import memora_event_worker
+
+        if settings.MEMORA_API_KEY:
+            background_tasks.append(asyncio.create_task(memora_event_worker()))
+
         async def _bg_seed():
             try:
                 await asyncio.sleep(2.0)
@@ -63,9 +70,13 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.warning("startup_background_seed_failed", error=str(exc))
 
-        asyncio.create_task(_bg_seed())
+        background_tasks.append(asyncio.create_task(_bg_seed()))
 
     yield
+    for task in background_tasks:
+        task.cancel()
+    if background_tasks:
+        await asyncio.gather(*background_tasks, return_exceptions=True)
     logger.info("application_shutdown")
 
 
