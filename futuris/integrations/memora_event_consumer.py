@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -80,15 +82,62 @@ async def _persist_notice_to_memora(event: dict[str, Any], payload: dict[str, An
     if isinstance(payload.get("source_url"), str):
         evidence["source_url"] = payload["source_url"][:2048]
     if isinstance(payload.get("sources"), list):
-        evidence["sources"] = [
-            item[:2048] for item in payload["sources"][:20] if isinstance(item, str)
-        ]
+        sources = []
+        for item in payload["sources"][:20]:
+            # IntelX sends structured public-source references. Preserve the
+            # provenance fields while accepting legacy string URLs too.
+            if isinstance(item, str):
+                source = {"url": item.strip()[:2048]}
+            elif isinstance(item, dict) and isinstance(item.get("url"), str):
+                source = {"url": item["url"].strip()[:2048]}
+                for field, limit in (
+                    ("title", 300),
+                    ("domain", 255),
+                    ("publisher", 255),
+                    ("published_at", 64),
+                    ("trust_tier", 32),
+                ):
+                    value = item.get(field)
+                    if isinstance(value, str) and value.strip():
+                        source[field] = value.strip()[:limit]
+            else:
+                continue
+            try:
+                parsed = urlsplit(source["url"])
+                hostname = parsed.hostname
+            except ValueError:
+                continue
+            if (
+                parsed.scheme.lower() in {"http", "https"}
+                and hostname
+                and not parsed.username
+                and not parsed.password
+            ):
+                sources.append(source)
+        if sources:
+            evidence["sources"] = sources
     if isinstance(payload.get("topics"), list):
         evidence["topics"] = [
             item[:100] for item in payload["topics"][:50] if isinstance(item, str)
         ]
     if isinstance(payload.get("relevance"), (int, float)):
         evidence["relevance"] = payload["relevance"]
+    elif isinstance(payload.get("relevance"), dict):
+        relevance = payload["relevance"]
+        normalized_relevance: dict[str, Any] = {}
+        for field in ("category", "domain"):
+            value = relevance.get(field)
+            if isinstance(value, str) and value.strip():
+                normalized_relevance[field] = value.strip()[:255]
+        confidence = relevance.get("confidence")
+        if (
+            isinstance(confidence, (int, float))
+            and not isinstance(confidence, bool)
+            and math.isfinite(confidence)
+        ):
+            normalized_relevance["confidence"] = max(0.0, min(1.0, float(confidence)))
+        if normalized_relevance:
+            evidence["relevance"] = normalized_relevance
     if isinstance(payload.get("published_at"), str):
         evidence["published_at"] = payload["published_at"][:64]
     content = "\n".join(part for part in (headline, summary) if part)

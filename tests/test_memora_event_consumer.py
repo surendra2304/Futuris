@@ -184,6 +184,25 @@ async def test_intelx_notice_is_written_to_memora_with_stable_idempotency(monkey
         "headline": "Exchange filing",
         "summary": "The exchange published a filing.",
         "source_url": "https://example.invalid/filing",
+        "sources": [
+            {
+                "url": "https://regulator.example/notices/123",
+                "title": "Regulator notice",
+                "publisher": "Example Regulator",
+                "published_at": "2026-09-27T12:00:00Z",
+                "trust_tier": "LIKELY_RELIABLE",
+            },
+            {"url": "file:///private/source"},
+            {"url": "https://[malformed-host/source"},
+            {"url": "https://user:secret@example.org/private"},
+        ],
+        "relevance": {
+            "category": "regulatory_change",
+            "confidence": 0.5,
+            "domain": "intelx.news",
+            "unexpected": "drop this",
+        },
+        "topics": ["stratex", "futuris"],
         "source_agent": "intelx",
     }
 
@@ -196,3 +215,18 @@ async def test_intelx_notice_is_written_to_memora_with_stable_idempotency(monkey
     assert body["target_namespace_path"] == "memora://futuris/intelx/notices"
     assert body["provenance"]["event_id"] == "intelx-stable-7"
     assert body["confidence"] == 0.0
+    assert body["provenance"]["evidence"]["sources"] == [
+        {
+            "url": "https://regulator.example/notices/123",
+            "title": "Regulator notice",
+            "publisher": "Example Regulator",
+            "published_at": "2026-09-27T12:00:00Z",
+            "trust_tier": "LIKELY_RELIABLE",
+        }
+    ]
+    assert body["provenance"]["evidence"]["relevance"] == {
+        "category": "regulatory_change",
+        "confidence": 0.5,
+        "domain": "intelx.news",
+    }
+    assert body["provenance"]["evidence"]["topics"] == ["stratex", "futuris"]
