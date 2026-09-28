@@ -13,5 +13,5 @@ async def test_ui_dist_mount_accessibility():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/ui/")
         assert resp.status_code == 200
-        assert "Futuris | Predictive Intelligence Platform" in resp.text
+        assert "Futuris | Universe Console" in resp.text
         assert '<div id="root"></div>' in resp.text

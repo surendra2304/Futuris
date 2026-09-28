@@ -2,6 +2,11 @@ import { Forecast, Outcome, CalibrationCurve, BacktestRun, EcosystemOverview, Un
 
 const API_BASE = '/v1';
 
+export async function fetchHealth(): Promise<{ status: string; version: string }> {
+  const res = await fetch('/health', { headers: getHeaders() });
+  return handleResponse<{ status: string; version: string }>(res, 'Failed to fetch Futuris health');
+}
+
 function getHeaders(): HeadersInit {
   const headers: Record<string, string> = {
     'Accept': 'application/json',
