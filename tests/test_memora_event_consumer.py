@@ -252,7 +252,6 @@ async def test_direct_webhook_is_durably_idempotent(monkeypatch):
 
     async def persist_memora_notice(_event, _payload):
         memora_writes.append((_event, _payload))
-        return None
 
     monkeypatch.setattr(
         "futuris.api.routers.webhooks._persist_notice_to_memora",
