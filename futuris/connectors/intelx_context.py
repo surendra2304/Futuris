@@ -121,21 +121,55 @@ class IntelXContextInjector:
             # Handle list format (e.g. from mock or query endpoint)
             if isinstance(raw_data, list):
                 for item in raw_data:
-                    pub_str = item.get("published_at", ref_time.isoformat())
-                    pub_dt = datetime.fromisoformat(pub_str)
-                    pub_dt = pub_dt.replace(tzinfo=UTC) if pub_dt.tzinfo is None else pub_dt.astimezone(UTC)
-                    reports.append(
-                        IntelXResearchReport(
-                            report_id=UUID(item.get("report_id", str(uuid4()))),
-                            asset_or_sector=item.get("asset_or_sector", asset_or_sector),
-                            published_at=pub_dt,
-                            summary=item.get("summary", f"IntelX research finding for {asset_or_sector}."),
-                            sentiment_score=float(item.get("sentiment_score", 0.0)),
-                            volatility_impact_factor=float(item.get("volatility_impact_factor", 1.0)),
-                            key_findings=item.get("key_findings", []),
-                            tags=item.get("tags", []),
+                    if not isinstance(item, dict):
+                        continue
+                    report_id = str(item.get("report_id", "")).strip()
+                    tags = item.get("tags", [])
+                    summary = item.get("summary")
+                    published = item.get("published_at")
+                    target = item.get("asset_or_sector")
+                    # IntelX's query API can return a synthetic baseline when
+                    # its database has no research runs. Never treat that
+                    # baseline as new market evidence.
+                    if (
+                        report_id == "intelx-baseline-report"
+                        or "baseline" in {str(tag).lower() for tag in tags if isinstance(tag, str)}
+                        or not isinstance(summary, str)
+                        or not summary.strip()
+                        or not isinstance(published, str)
+                        or not isinstance(target, str)
+                        or not target.strip()
+                    ):
+                        continue
+                    try:
+                        pub_dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                        pub_dt = (
+                            pub_dt.replace(tzinfo=UTC)
+                            if pub_dt.tzinfo is None
+                            else pub_dt.astimezone(UTC)
                         )
-                    )
+                        if pub_dt < start_time or pub_dt > ref_time:
+                            continue
+                        stable_id = UUID(report_id) if report_id else uuid5(
+                            NAMESPACE_URL,
+                            f"intelx:{target}:{pub_dt.isoformat()}:{summary.strip()}",
+                        )
+                        reports.append(
+                            IntelXResearchReport(
+                                report_id=stable_id,
+                                asset_or_sector=target.strip(),
+                                published_at=pub_dt,
+                                summary=summary.strip(),
+                                sentiment_score=float(item.get("sentiment_score", 0.0)),
+                                volatility_impact_factor=float(
+                                    item.get("volatility_impact_factor", 1.0)
+                                ),
+                                key_findings=item.get("key_findings", []),
+                                tags=tags,
+                            )
+                        )
+                    except (TypeError, ValueError):
+                        logger.warning("intelx_report_invalid_skipped")
                 return reports
 
             # Handle dict format (ForecastContextResponse)

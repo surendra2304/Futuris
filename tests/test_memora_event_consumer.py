@@ -352,3 +352,41 @@ async def test_durable_news_context_uses_only_matched_real_notices(monkeypatch):
     assert reports[0].summary == "Bitcoin exchange filing"
     assert reports[0].sentiment_score == -0.4
     assert reports[0].volatility_impact_factor == 1.5
+
+
+@pytest.mark.asyncio
+async def test_intelx_query_baseline_and_missing_dates_are_not_evidence():
+    from datetime import UTC, datetime
+
+    from futuris.connectors.intelx_context import IntelXContextInjector
+
+    now = datetime(2026, 9, 29, 12, tzinfo=UTC)
+    payload = [
+        {
+            "report_id": "intelx-baseline-report",
+            "asset_or_sector": "BTCUSDT",
+            "published_at": now.isoformat(),
+            "summary": "IntelX qualitative research baseline",
+            "sentiment_score": 0.2,
+            "volatility_impact_factor": 1.1,
+            "tags": ["intelx", "baseline"],
+        },
+        {
+            "report_id": "actual-but-undated",
+            "asset_or_sector": "BTCUSDT",
+            "summary": "This has no trustworthy publication time.",
+            "sentiment_score": 0.9,
+        },
+    ]
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        if _request.method == "POST":
+            return httpx.Response(404)
+        return httpx.Response(200, json=payload)
+
+    injector = IntelXContextInjector(
+        base_url="http://intelx.local",
+        api_key="test-token",
+        transport=httpx.MockTransport(handler),
+    )
+    assert await injector.fetch_recent_research("BTCUSDT", as_of=now) == []
