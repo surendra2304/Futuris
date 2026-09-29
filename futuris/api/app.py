@@ -26,6 +26,7 @@ from futuris.api.routers.predictions import router as predictions_router
 from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.api.routers.webhooks import router as webhooks_router
 from futuris.demo.seed import DemoSeeder
+from futuris.demo.startup_policy import should_seed_demo_on_startup
 from futuris.infra.config import settings
 from futuris.infra.logging import configure_logging, get_logger
 from futuris.infra.metrics import metrics_endpoint
@@ -38,7 +39,7 @@ logger = get_logger("futuris.api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifecycle: initialize database tables and auto-seed in background if empty."""
+    """Initialize storage and background workers without fabricating production telemetry."""
     import sys
 
     try:
@@ -55,22 +56,28 @@ async def lifespan(app: FastAPI):
         if settings.MEMORA_API_KEY:
             background_tasks.append(asyncio.create_task(memora_event_worker()))
 
-        async def _bg_seed():
-            try:
-                await asyncio.sleep(2.0)
-                async with async_session_factory() as session:
-                    count_res = await session.execute(select(func.count(ForecastModel.forecast_id)))
-                    forecast_count = count_res.scalar_one_or_none() or 0
+        if should_seed_demo_on_startup(
+            settings.APP_ENV, settings.STARTUP_DEMO_SEED_ENABLED
+        ):
 
-                if forecast_count == 0:
-                    logger.info("startup_db_empty_initiating_fast_seed")
-                    seeder = DemoSeeder(seed=42)
-                    await seeder.run(days=7, backtest_days=0, fast_mode=True)
-                    logger.info("startup_db_initial_seed_completed")
-            except Exception as exc:
-                logger.warning("startup_background_seed_failed", error=str(exc))
+            async def _bg_seed():
+                try:
+                    await asyncio.sleep(2.0)
+                    async with async_session_factory() as session:
+                        count_res = await session.execute(
+                            select(func.count(ForecastModel.forecast_id))
+                        )
+                        forecast_count = count_res.scalar_one_or_none() or 0
 
-        background_tasks.append(asyncio.create_task(_bg_seed()))
+                    if forecast_count == 0:
+                        logger.info("startup_db_empty_initiating_opt_in_demo_seed")
+                        seeder = DemoSeeder(seed=42)
+                        await seeder.run(days=7, backtest_days=0, fast_mode=True)
+                        logger.info("startup_demo_seed_completed")
+                except Exception as exc:
+                    logger.warning("startup_background_seed_failed", error=str(exc))
+
+            background_tasks.append(asyncio.create_task(_bg_seed()))
 
     yield
     for task in background_tasks:

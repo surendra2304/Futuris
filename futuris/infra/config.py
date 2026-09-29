@@ -20,6 +20,13 @@ class Settings(BaseSettings):
         default="production",
         description="Application running environment mode.",
     )
+    STARTUP_DEMO_SEED_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Allow synthetic demo forecasts to seed an empty non-production database at startup. "
+            "Production startup never seeds synthetic demo telemetry."
+        ),
+    )
     DATABASE_URL: str = Field(
         default="sqlite+aiosqlite:///./data/futuris.db",
         description="Async connection string for database (SQLite or PostgreSQL).",
