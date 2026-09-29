@@ -1,13 +1,17 @@
 """IntelX Context Injector fetching external research findings as exogenous features."""
 
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import httpx
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from futuris.infra.logging import get_logger
+from futuris.storage.db import async_session_factory
+from futuris.storage.models import IntelXNoticeModel
 
 logger = get_logger("futuris.connectors.intelx_context")
 
@@ -177,6 +181,111 @@ class IntelXContextInjector:
         # Missing or empty upstream data is not market/news evidence. Callers can
         # continue with their primary data and receive neutral IntelX modifiers.
         return []
+
+    async def fetch_durable_notice_context(
+        self,
+        asset_or_sector: str,
+        lookback_days: int = 7,
+        as_of: datetime | None = None,
+    ) -> list[IntelXResearchReport]:
+        """Load genuine IntelX inbox notices relevant to an explicitly tagged market.
+
+        News without an explicit asset or market/crypto classification is kept
+        in the inbox, but is not injected into an unrelated market forecast.
+        Missing sentiment/volatility measurements remain neutral; no values are
+        inferred from prose.
+        """
+        ref_time = as_of or datetime.now(UTC)
+        start_time = ref_time - timedelta(days=lookback_days)
+        requested = asset_or_sector.strip().upper()
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(IntelXNoticeModel)
+                .where(IntelXNoticeModel.received_at >= start_time)
+                .order_by(IntelXNoticeModel.received_at.desc())
+                .limit(200)
+            )
+            notices = result.scalars().all()
+
+        reports: list[IntelXResearchReport] = []
+        for notice in notices:
+            payload = notice.payload if isinstance(notice.payload, dict) else {}
+            if not self._notice_matches_market(payload, requested):
+                continue
+            summary = str(
+                payload.get("finding_summary")
+                or payload.get("summary")
+                or payload.get("headline")
+                or ""
+            ).strip()
+            if not summary:
+                continue
+            try:
+                sentiment = payload.get("sentiment_score", 0.0)
+                if isinstance(sentiment, bool) or not isinstance(sentiment, (int, float)):
+                    sentiment = 0.0
+                sentiment = float(sentiment)
+                if not isfinite(sentiment) or not -1.0 <= sentiment <= 1.0:
+                    sentiment = 0.0
+                volatility = payload.get("volatility_impact_factor", 1.0)
+                if isinstance(volatility, bool) or not isinstance(volatility, (int, float)):
+                    volatility = 1.0
+                volatility = float(volatility)
+                if not isfinite(volatility) or not 0.5 <= volatility <= 3.0:
+                    volatility = 1.0
+                published = payload.get("published_at") or payload.get("timestamp")
+                published_at = (
+                    datetime.fromisoformat(published.replace("Z", "+00:00"))
+                    if isinstance(published, str)
+                    else notice.received_at
+                )
+                published_at = (
+                    published_at.replace(tzinfo=UTC)
+                    if published_at.tzinfo is None
+                    else published_at.astimezone(UTC)
+                )
+                reports.append(
+                    IntelXResearchReport(
+                        report_id=uuid5(NAMESPACE_URL, f"futuris-intelx:{notice.event_id}"),
+                        asset_or_sector=asset_or_sector,
+                        published_at=published_at,
+                        summary=summary[:4000],
+                        sentiment_score=sentiment,
+                        volatility_impact_factor=volatility,
+                        key_findings=[summary[:1000]],
+                        tags=["intelx", "memora_event_inbox"],
+                    )
+                )
+            except (TypeError, ValueError):
+                logger.warning("intelx_notice_context_invalid", event_id=notice.event_id)
+        return reports
+
+    @staticmethod
+    def _notice_matches_market(payload: dict[str, Any], requested: str) -> bool:
+        """Require explicit target metadata or a market/crypto classification."""
+        aliases = {
+            "BTCUSDT": {"BTCUSDT", "BTC", "BITCOIN"},
+            "ETHUSDT": {"ETHUSDT", "ETH", "ETHEREUM"},
+            "SOLUSDT": {"SOLUSDT", "SOL", "SOLANA"},
+        }
+        requested_aliases = aliases.get(requested, {requested})
+        explicit_values: list[str] = []
+        for key in ("symbol", "asset", "asset_or_sector"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                explicit_values.append(value.upper())
+        for key in ("symbols", "assets", "target_assets", "recommended_forecast_targets"):
+            values = payload.get(key)
+            if isinstance(values, list):
+                explicit_values.extend(value.upper() for value in values if isinstance(value, str))
+        for value in explicit_values:
+            if value in requested_aliases or value.endswith(f":{requested}"):
+                return True
+        relevance = payload.get("relevance")
+        domain = relevance.get("domain", "") if isinstance(relevance, dict) else payload.get("domain", "")
+        category = relevance.get("category", "") if isinstance(relevance, dict) else payload.get("category", "")
+        market_labels = {str(domain).lower(), str(category).lower()}
+        return bool(market_labels & {"market", "crypto", "cryptocurrency", "digital_assets"})
 
     def compute_exogenous_adjustments(
         self,

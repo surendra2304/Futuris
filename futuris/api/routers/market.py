@@ -4,12 +4,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Body, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from futuris.api.deps import get_db_session, get_forecast_repo
-from futuris.connectors.intelx_context import IntelXContextInjector
+from futuris.api.deps import get_forecast_repo
+from futuris.connectors.intelx_context import IntelXContextInjector, IntelXResearchReport
 from futuris.connectors.trading_bot import TradingBotConnector
 from futuris.core.enums import ConfidenceLevel, ForecastStatus, SignalClass, SourceTrust
 from futuris.core.schemas import Driver, EvidenceRef, Forecast
@@ -81,6 +80,7 @@ async def _generate_market_prediction(
     include_intelx: bool = True,
     include_inference: bool = True,
     forecast_repo: ForecastRepository | None = None,
+    intelx_catalyst: tuple[str, str] | None = None,
 ) -> MarketForecastResponse:
     """Core market predictive intelligence orchestrator combining Stratex telemetry, IntelX research, and Inference."""
     clean_sym = symbol.upper().strip() if symbol else "BTCUSDT"
@@ -96,36 +96,64 @@ async def _generate_market_prediction(
     }
     top_findings = []
     if include_intelx:
+        intelx_client = IntelXContextInjector(
+            base_url=settings.INTELX_URL,
+            api_key=settings.INTELX_API_KEY,
+        )
         try:
-            intelx_client = IntelXContextInjector(
-                base_url=settings.INTELX_URL,
-                api_key=settings.INTELX_API_KEY,
-            )
             intelx_reports = await intelx_client.fetch_recent_research(
                 asset_or_sector=clean_sym,
                 lookback_days=7,
                 as_of=now,
             )
-            if intelx_reports:
-                exogenous_adj = intelx_client.compute_exogenous_adjustments(intelx_reports)
-                top_findings = intelx_reports[0].key_findings
-                logger.info(
-                    "intelx_market_context_acquired",
-                    symbol=clean_sym,
-                    sentiment=intelx_reports[0].sentiment_score,
-                    findings_count=len(top_findings),
-                )
         except Exception as exc:
-            logger.warning("intelx_market_query_failed_using_safe_defaults", symbol=clean_sym, error=str(exc))
+            logger.warning("intelx_market_query_failed", symbol=clean_sym, error=type(exc).__name__)
+        try:
+            intelx_reports.extend(
+                await intelx_client.fetch_durable_notice_context(
+                    asset_or_sector=clean_sym,
+                    lookback_days=7,
+                    as_of=now,
+                )
+            )
+        except Exception as exc:
+            logger.warning("intelx_notice_inbox_unavailable", symbol=clean_sym, error=type(exc).__name__)
+        if intelx_reports:
+            intelx_reports.sort(key=lambda report: report.published_at, reverse=True)
+            exogenous_adj = intelx_client.compute_exogenous_adjustments(intelx_reports)
+            top_findings = intelx_reports[0].key_findings
+            logger.info(
+                "intelx_market_context_acquired",
+                symbol=clean_sym,
+                sentiment=intelx_reports[0].sentiment_score,
+                findings_count=len(top_findings),
+            )
+    if intelx_catalyst:
+        catalyst_id, catalyst_summary = intelx_catalyst
+        from uuid import NAMESPACE_URL, uuid5
+
+        intelx_reports.append(
+            IntelXResearchReport(
+                report_id=uuid5(NAMESPACE_URL, catalyst_id),
+                asset_or_sector=clean_sym,
+                published_at=now,
+                summary=catalyst_summary,
+                sentiment_score=0.0,
+                volatility_impact_factor=1.0,
+                key_findings=[catalyst_summary],
+                tags=["intelx", "webhook_catalyst"],
+            )
+        )
+        top_findings = [catalyst_summary]
 
     # 2. Ingest Stratex Market Telemetry
     trading_connector = TradingBotConnector(
         base_url=settings.STRATEX_URL,
         api_key=settings.STRATEX_API_KEY,
     )
-    equity_val = 5000.0
-    volatility_metric = 0.38
-    drawdown_metric = 2.0
+    equity_val: float | None = None
+    volatility_metric: float | None = None
+    drawdown_metric: float | None = None
     try:
         telemetry_obs = await trading_connector.fetch(start=now - timedelta(hours=48), end=now)
         for obs in telemetry_obs:
@@ -136,8 +164,16 @@ async def _generate_market_prediction(
             elif "equity" in obs.series_id:
                 equity_val = float(obs.value)
     except Exception as exc:
-        logger.warning("stratex_telemetry_fetch_fallback", error=str(exc))
+        logger.warning("stratex_telemetry_unavailable", error=type(exc).__name__)
 
+    if volatility_metric is None or drawdown_metric is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Fresh Stratex volatility and drawdown telemetry are required. "
+                "No market forecast was generated from placeholder values."
+            ),
+        )
     # 3. Compute Volatility Forecast
     sentiment = float(exogenous_adj.get("sentiment_multiplier", 1.0))
     vol_mult = float(exogenous_adj.get("volatility_multiplier", 1.0))
@@ -148,10 +184,9 @@ async def _generate_market_prediction(
     lower_pct = round(-2.5 * vol_mult, 2)
     upper_pct = round((3.5 if sentiment >= 1.0 else 1.8) * vol_mult, 2)
 
-    drivers_list = [
-        f"stratex_volatility_idx:{volatility_metric:.2f}",
-        f"telemetry_equity_level:${equity_val:.0f}",
-    ]
+    drivers_list = [f"stratex_volatility_idx:{volatility_metric:.2f}"]
+    if equity_val is not None:
+        drivers_list.append(f"telemetry_equity_level:${equity_val:.0f}")
     if top_findings:
         drivers_list.append(f"intelx:{top_findings[0][:40]}")
     else:
@@ -194,7 +229,10 @@ async def _generate_market_prediction(
                 range_upper=upper_pct,
                 model_used="statsforecast_garch_intelx",
                 probability=vol_prob,
-                contextual_factors=[rationale, f"Stratex equity: ${equity_val:.2f}"],
+                contextual_factors=[
+                    rationale,
+                    *([f"Stratex equity: ${equity_val:.2f}"] if equity_val is not None else []),
+                ],
                 target_context={"domain": "cryptocurrency_trading", "symbol": clean_sym},
             )
             if inf_enhancement and "consensus" in inf_enhancement:
@@ -312,7 +350,7 @@ async def _generate_market_prediction(
             predicted_direction=predicted_dir,
             rationale=rationale,
         ),
-        intelx_context_included=len(intelx_reports) > 0 or include_intelx,
+        intelx_context_included=bool(intelx_reports),
         inference_grounded=inference_grounded,
         forecast_id=str(forecast_id),
         timestamp=now.isoformat(),

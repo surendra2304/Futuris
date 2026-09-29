@@ -59,27 +59,29 @@ class TradingBotConnector(BaseConnector):
                 if resp.status_code == 200:
                     data = resp.json()
                 elif resp.status_code == 404:
-                    # Stratex status fallback
+                    # A status snapshot may contain current values, but never
+                    # manufacture a time series from a single snapshot.
                     status_url = f"{self.base_url}/api/v1/status"
                     resp_status = await client.get(status_url, headers=headers)
                     if resp_status.status_code == 200:
                         status_json = resp_status.json().get("data", {})
-                        equity = float(status_json.get("equity", 5000.0))
-                        drawdown = float(status_json.get("max_drawdown_pct", 2.0))
-                        data = [
-                            {"timestamp": s_dt.isoformat(), "metric_type": "equity", "value": equity, "source": "stratex:live"},
-                            {"timestamp": e_dt.isoformat(), "metric_type": "equity", "value": equity + 35.0, "source": "stratex:live"},
-                            {"timestamp": e_dt.isoformat(), "metric_type": "drawdown", "value": drawdown, "source": "stratex:live"},
-                            {"timestamp": e_dt.isoformat(), "metric_type": "volatility", "value": 0.42, "source": "stratex:live"},
-                        ]
+                        observed_at = status_json.get("updated_at") or status_json.get("timestamp")
+                        if observed_at:
+                            for key, metric_type in (
+                                ("equity", "equity"),
+                                ("max_drawdown_pct", "drawdown"),
+                                ("volatility", "volatility"),
+                            ):
+                                value = status_json.get(key)
+                                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                                    data.append({
+                                        "timestamp": observed_at,
+                                        "metric_type": metric_type,
+                                        "value": value,
+                                        "source": "stratex:status_snapshot",
+                                    })
         except Exception as exc:
-            logger.warning("trading_telemetry_live_failed_fallback", error=str(exc))
-            data = [
-                {"timestamp": s_dt.isoformat(), "metric_type": "equity", "value": 5000.0, "source": "trading_bot:fallback"},
-                {"timestamp": e_dt.isoformat(), "metric_type": "equity", "value": 5050.0, "source": "trading_bot:fallback"},
-                {"timestamp": e_dt.isoformat(), "metric_type": "drawdown", "value": 1.8, "source": "trading_bot:fallback"},
-                {"timestamp": e_dt.isoformat(), "metric_type": "volatility", "value": 0.38, "source": "trading_bot:fallback"},
-            ]
+            logger.warning("trading_telemetry_unavailable_no_fallback", error=type(exc).__name__)
 
         observations: list[Observation] = []
         for item in data:

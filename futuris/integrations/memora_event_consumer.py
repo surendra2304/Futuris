@@ -120,6 +120,23 @@ async def _persist_notice_to_memora(event: dict[str, Any], payload: dict[str, An
         evidence["topics"] = [
             item[:100] for item in payload["topics"][:50] if isinstance(item, str)
         ]
+    for field in ("symbol", "asset", "asset_or_sector"):
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            evidence[field] = value.strip()[:100]
+    for field in ("symbols", "assets", "target_assets", "recommended_forecast_targets"):
+        values = payload.get(field)
+        if isinstance(values, list):
+            evidence[field] = [item.strip()[:100] for item in values[:50] if isinstance(item, str) and item.strip()]
+    for field, lower, upper in (("sentiment_score", -1.0, 1.0), ("volatility_impact_factor", 0.5, 3.0)):
+        value = payload.get(field)
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and lower <= value <= upper
+        ):
+            evidence[field] = float(value)
     if isinstance(payload.get("relevance"), (int, float)):
         evidence["relevance"] = payload["relevance"]
     elif isinstance(payload.get("relevance"), dict):
