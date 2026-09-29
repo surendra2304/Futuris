@@ -15,6 +15,10 @@ from futuris.core.schemas import Driver, EvidenceRef, Forecast
 from futuris.ecosystem.adapters import ecosystem_adapter
 from futuris.infra.config import settings
 from futuris.infra.logging import get_logger
+from futuris.integrations.memora_forecast_publisher import (
+    MemoraForecastPublishError,
+    publish_forecast_advisory,
+)
 from futuris.storage.repositories import ForecastRepository
 
 logger = get_logger("futuris.api.market")
@@ -64,6 +68,7 @@ class MarketForecastResponse(BaseModel):
     inference_grounded: bool
     forecast_id: str
     timestamp: str
+    memora_event_id: str | None = None
 
 
 class MarketAccuracyResponse(BaseModel):
@@ -243,6 +248,7 @@ async def _generate_market_prediction(
             logger.debug("inference_enhancement_skipped", error=str(exc))
 
     # 7. Persist to Futuris Database if repository provided
+    persisted_forecast: Forecast | None = None
     if forecast_repo:
         try:
             conf_enum = ConfidenceLevel.HIGH if confidence_score >= 0.85 else (ConfidenceLevel.MEDIUM if confidence_score >= 0.70 else ConfidenceLevel.LOW)
@@ -284,32 +290,26 @@ async def _generate_market_prediction(
                 status=ForecastStatus.ACTIVE,
             )
             await forecast_repo.create(db_forecast)
+            persisted_forecast = db_forecast
             logger.info("market_forecast_persisted", forecast_id=str(forecast_id), symbol=clean_sym)
         except Exception as exc:
             logger.warning("market_forecast_persistence_failed", error=str(exc))
 
-    # 8. Dispatch Memory to Memora
-    try:
-        memora_content = (
-            f"FUTURIS Market Volatility Forecast for {clean_sym}: "
-            f"Regime={regime}, Direction={predicted_dir}, Volatility_Prob={vol_prob:.1%}, "
-            f"Drawdown_Risk={dd_prob:.1%}, Confidence={confidence_score:.2f}. Rationale: {rationale}"
-        )
-        memory_stored = await ecosystem_adapter.publish_market_forecast_to_memora(
-            symbol=clean_sym,
-            content=memora_content,
-            metadata={
-                "forecast_id": str(forecast_id),
-                "regime": regime,
-                "volatility_probability": vol_prob,
-                "drawdown_probability": dd_prob,
-                "confidence": confidence_score,
-            },
-        )
-        if not memory_stored:
-            logger.warning("memora_market_dispatch_failed", forecast_id=str(forecast_id), symbol=clean_sym)
-    except Exception as exc:
-        logger.warning("memora_market_dispatch_failed", forecast_id=str(forecast_id), error=type(exc).__name__)
+    # 8. Publish only a persisted, evidence-backed forecast. Predictions are advisory and
+    # must never grant Stratex or another recipient authority to place a trade.
+    memora_event_id = None
+    if persisted_forecast is not None:
+        try:
+            memora_event_id = await publish_forecast_advisory(
+                persisted_forecast,
+                confidence_score,
+            )
+        except (MemoraForecastPublishError, ValueError) as exc:
+            logger.warning(
+                "memora_market_event_publish_failed",
+                forecast_id=str(forecast_id),
+                error=str(exc) if isinstance(exc, MemoraForecastPublishError) else type(exc).__name__,
+            )
 
     # 9. Outbound Notify to Stratex
     try:
@@ -354,6 +354,7 @@ async def _generate_market_prediction(
         inference_grounded=inference_grounded,
         forecast_id=str(forecast_id),
         timestamp=now.isoformat(),
+        memora_event_id=memora_event_id,
     )
 
 
