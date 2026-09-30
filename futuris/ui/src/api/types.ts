@@ -90,7 +90,9 @@ export interface PeerAgent {
   role: string;
   status: 'online' | 'degraded' | 'offline';
   latency_ms: number | null;
-  last_interaction: string;
+  evidence_class: 'http_health_200' | 'http_health_non_200' | 'probe_failed';
+  http_status: number | null;
+  observed_at: string;
   capabilities: string[];
 }
 

@@ -79,27 +79,29 @@ export const EcosystemPage: React.FC = () => {
     }
   };
 
-  const getStatusBadge = (status: PeerAgent['status']) => {
-    switch (status) {
+  const getStatusBadge = (peer: PeerAgent) => {
+    const label = peer.http_status === null ? 'PROBE FAILED' : `HTTP ${peer.http_status}`;
+
+    switch (peer.status) {
       case 'online':
         return (
           <span className="flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
             <CheckCircle className="w-3 h-3 text-emerald-600" />
-            <span>ONLINE</span>
+            <span>{label}</span>
           </span>
         );
       case 'degraded':
         return (
           <span className="flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
             <AlertTriangle className="w-3 h-3 text-amber-600" />
-            <span>DEGRADED</span>
+            <span>{label}</span>
           </span>
         );
       default:
         return (
           <span className="flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-300">
             <XCircle className="w-3 h-3 text-rose-600" />
-            <span>OFFLINE</span>
+            <span>{label}</span>
           </span>
         );
     }
@@ -114,7 +116,7 @@ export const EcosystemPage: React.FC = () => {
             <span>FRIDAY Universe Ecosystem Integration</span>
           </h1>
           <p className="text-sm text-slate-500">
-            Live multi-agent orchestration fabric: exogenous research, multi-model reasoning, shared memory, and algorithmic trading.
+            Configured peer endpoints are checked with one HTTP health request. This does not verify deployment readiness or dependencies.
           </p>
         </div>
         <div className="flex items-center space-x-3">
@@ -124,7 +126,7 @@ export const EcosystemPage: React.FC = () => {
             className="flex items-center space-x-1 px-3 py-1.5 bg-slate-800 text-white rounded-md text-sm hover:bg-slate-700 disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            <span>Probe Health</span>
+            <span>Probe HTTP Health</span>
           </button>
         </div>
       </div>
@@ -232,7 +234,7 @@ export const EcosystemPage: React.FC = () => {
                   <div className="font-bold text-base text-slate-900 tracking-wide font-mono uppercase">
                     {peer.name}
                   </div>
-                  {getStatusBadge(peer.status)}
+                  {getStatusBadge(peer)}
                 </div>
                 <p className="text-xs text-slate-500 font-medium">{peer.role}</p>
                 <div className="text-xs font-mono text-slate-400 truncate bg-slate-50 px-2 py-1 rounded border border-slate-100">
@@ -248,10 +250,13 @@ export const EcosystemPage: React.FC = () => {
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">Last Synced:</span>
+                  <span className="text-slate-400">Server observed (UTC):</span>
                   <span className="font-mono text-slate-500 text-[11px] truncate max-w-[160px]">
-                    {peer.last_interaction}
+                    {new Date(peer.observed_at).toISOString()}
                   </span>
+                </div>
+                <div className="text-[10px] text-slate-400" title="A single HTTP health endpoint probe does not verify deployment readiness or dependencies.">
+                  Evidence: {peer.evidence_class}{peer.http_status === null ? '' : ` (HTTP ${peer.http_status})`}
                 </div>
                 <div className="space-y-1">
                   <div className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold">Active Capabilities:</div>

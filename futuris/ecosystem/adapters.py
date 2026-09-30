@@ -218,7 +218,7 @@ class EcosystemAdapter:
             },
             {
                 "name": "Inference",
-                "role": "Multi-Model Reasoning Gateway (25 Keys)",
+                "role": "Multi-Model Reasoning Gateway",
                 "url": settings.INFERENCE_URL,
                 "probe_url": f"{settings.INFERENCE_URL.rstrip('/')}/health",
                 "headers": {"Authorization": f"Bearer {settings.INFERENCE_API_KEY}"},
@@ -234,7 +234,7 @@ class EcosystemAdapter:
             },
             {
                 "name": "Stratex",
-                "role": "24/7 Algorithmic Trading Execution Engine",
+                "role": "Algorithmic Trading Execution Engine",
                 "url": settings.STRATEX_URL,
                 "probe_url": f"{settings.STRATEX_URL.rstrip('/')}/health",
                 "headers": {"Authorization": f"Bearer {settings.STRATEX_API_KEY}"},
@@ -275,19 +275,24 @@ class EcosystemAdapter:
         ]
 
         async def _check_peer(client: httpx.AsyncClient, p: dict[str, Any]) -> dict[str, Any]:
-            import time
             t0 = time.perf_counter()
             status_str = "offline"
             latency_ms = None
+            http_status: int | None = None
+            evidence_class = "probe_failed"
             try:
                 resp = await client.get(p["probe_url"], headers=p["headers"], timeout=1.5)
                 latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+                http_status = resp.status_code
                 if resp.status_code == 200:
                     status_str = "online"
+                    evidence_class = "http_health_200"
                 elif resp.status_code in (401, 403, 404):
                     status_str = "degraded"
+                    evidence_class = "http_health_non_200"
                 else:
                     status_str = "offline"
+                    evidence_class = "http_health_non_200"
             except Exception:
                 status_str = "offline"
 
@@ -297,7 +302,9 @@ class EcosystemAdapter:
                 "url": p["url"],
                 "status": status_str,
                 "latency_ms": latency_ms,
-                "last_interaction": datetime.now(UTC).isoformat(),
+                "evidence_class": evidence_class,
+                "http_status": http_status,
+                "observed_at": datetime.now(UTC).isoformat(),
                 "capabilities": p["capabilities"],
             }
 

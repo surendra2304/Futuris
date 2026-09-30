@@ -22,7 +22,9 @@ class PeerAgentInfo(BaseModel):
     url: str
     status: str
     latency_ms: float | None
-    last_interaction: str
+    evidence_class: str
+    http_status: int | None
+    observed_at: datetime
     capabilities: list[str]
 
 
