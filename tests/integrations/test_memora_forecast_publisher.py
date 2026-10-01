@@ -128,3 +128,14 @@ def test_inactive_forecast_cannot_be_published():
             0.84,
             signing_key="futuris-test-key",
         )
+
+
+def test_envelope_threads_explicit_correlation_id_for_one_journey():
+    envelope = build_forecast_envelope(
+        _forecast(),
+        0.84,
+        signing_key="futuris-test-key",
+        correlation_id="corr-journey-intelx-1",
+    )
+    assert envelope["correlation_id"] == "corr-journey-intelx-1"
+    assert envelope["payload"]["prediction_is_not_authorization"] is True

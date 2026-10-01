@@ -32,6 +32,7 @@ def build_forecast_envelope(
     signing_key: str,
     created_at: float | None = None,
     recipient: str = FORECAST_RECIPIENT,
+    correlation_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic-ID, compact advisory envelope from a real forecast."""
     if not signing_key:
@@ -66,7 +67,9 @@ def build_forecast_envelope(
     }
     envelope: dict[str, Any] = {
         "message_id": message_id,
-        "correlation_id": forecast_id,
+        # An explicit correlation_id lets one journey thread the same ID across
+        # hops (e.g. the IntelX signal that motivated this advisory).
+        "correlation_id": correlation_id or forecast_id,
         "from_agent": "futuris",
         "to_agent": recipient.lower().strip(),
         "intent": FORECAST_INTENT,
@@ -93,6 +96,7 @@ async def publish_forecast_advisory(
     confidence_score: float,
     *,
     transport: httpx.AsyncBaseTransport | None = None,
+    correlation_id: str | None = None,
 ) -> str:
     """Publish to Sentinel's Memora feed; return event ID only after acceptance."""
     key = settings.FUTURIS_API_KEY
@@ -101,6 +105,7 @@ async def publish_forecast_advisory(
         confidence_score,
         signing_key=key or "",
         recipient="all",
+        correlation_id=correlation_id,
     )
     url = f"{settings.MEMORA_URL.rstrip('/')}/mesh/envelope"
     headers = {
