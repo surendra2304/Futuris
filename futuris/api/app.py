@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -222,8 +223,14 @@ async def root(request: Request) -> Any:
 
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
 async def health_check() -> dict[str, Any]:
-    """Health check endpoint returning system status and current version."""
+    """Health check endpoint returning system status and current version.
+
+    This answer proves the process is up and serving requests. It does not probe
+    any dependency, so it says so instead of leaving the reader to guess.
+    """
     return {
         "status": "ok",
+        "evidence_class": "process_liveness",
+        "observed_at": datetime.now(UTC).isoformat(),
         "version": __version__,
     }
