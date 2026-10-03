@@ -56,7 +56,14 @@ async def verify_friday_auth(
     """Verify incoming FRIDAY API Key against FUTURIS_FRIDAY_API_KEY config."""
     import os
 
-    expected_key = os.getenv("FUTURIS_FRIDAY_API_KEY") or settings.FUTURIS_FRIDAY_API_KEY
+    # Every other agent names the caller's credential <AGENT>_API_KEY. Futuris was the
+    # sole exception, so a deployment configured to the fleet convention left this guard
+    # permanently unconfigured and every FRIDAY->Futuris call failed with a 503.
+    expected_key = (
+        os.getenv("FUTURIS_FRIDAY_API_KEY")
+        or os.getenv("FRIDAY_API_KEY")
+        or settings.FUTURIS_FRIDAY_API_KEY
+    )
     admin_key = os.getenv("FUTURIS_API_KEY") or settings.FUTURIS_API_KEY
     auth_key = x_api_key
     if not auth_key and authorization:
