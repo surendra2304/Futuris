@@ -103,8 +103,14 @@ class IntelXContextInjector:
                     else:
                         resp.raise_for_status()
                         raw_data = resp.json()
-                except (httpx.HTTPStatusError, httpx.RequestError):
-                    # Try query endpoint if post failed
+                except httpx.RequestError:
+                    # The transport itself failed: the peer is unreachable, down or
+                    # not answering. Retrying a different endpoint on the same host
+                    # cannot succeed, and it doubles the wait for every target --
+                    # with a dead peer the 16-target refresh spent 61s doing it.
+                    raise
+                except httpx.HTTPStatusError:
+                    # Try query endpoint if post returned an unexpected status
                     query_url = f"{self.base_url}/api/v1/research/query"
                     params = {
                         "sector": asset_or_sector,

@@ -1,5 +1,6 @@
 """Universal FRIDAY Universe prediction router serving all 9 ecosystem subsystems."""
 
+import asyncio
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -27,6 +28,12 @@ from futuris.infra.config import settings
 from futuris.infra.logging import get_logger
 from futuris.storage.models import ForecastModel
 from futuris.storage.repositories import ForecastRepository
+
+# Refreshing every universe target performs an outbound IntelX context call per
+# target. Those calls are serial and each one can burn its full client timeout when
+# IntelX is down, which turned this route into a 61s request; the loop is bounded
+# so a dead peer costs a bounded wait instead of one timeout per target.
+_REFRESH_BUDGET_SECONDS = 15.0
 
 logger = get_logger("futuris.api.predictions")
 
@@ -372,9 +379,21 @@ async def get_universe_matrix(
         latest_by_target[f.target] = f
 
     # Ensure all registered targets have a forecast represented
+    deadline_started = time.monotonic()
     for target in UNIVERSE_TARGETS:
         if target not in latest_by_target:
-            f = await _generate_universe_forecast(target, session=session)
+            remaining = _REFRESH_BUDGET_SECONDS - (time.monotonic() - deadline_started)
+            if remaining <= 0:
+                logger.info(
+                    "universe_matrix_refresh_budget_exhausted",
+                    refreshed=len(latest_by_target),
+                    total=len(UNIVERSE_TARGETS),
+                )
+                break
+            f = await asyncio.wait_for(
+                _generate_universe_forecast(target, session=session),
+                timeout=remaining,
+            )
             latest_by_target[target] = f
 
     # Group by domain
@@ -480,7 +499,29 @@ async def refresh_universe_predictions(
 ) -> UniverseMatrixResponse:
     """Trigger recalculation across all 9 FRIDAY Universe pillars with fresh telemetry and IntelX context."""
     logger.info("refreshing_all_universe_predictions_started")
+    deadline_started = time.monotonic()
+    refreshed = 0
     for target in UNIVERSE_TARGETS:
-        await _generate_universe_forecast(target, session=session)
+        remaining = _REFRESH_BUDGET_SECONDS - (time.monotonic() - deadline_started)
+        if remaining <= 0:
+            logger.info(
+                "refresh_all_budget_exhausted",
+                refreshed=refreshed,
+                total=len(UNIVERSE_TARGETS),
+            )
+            break
+        try:
+            await asyncio.wait_for(
+                _generate_universe_forecast(target, session=session),
+                timeout=remaining,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning(
+                "refresh_all_target_timed_out",
+                target=target,
+                budget_seconds=_REFRESH_BUDGET_SECONDS,
+            )
+            break
+        refreshed += 1
 
     return await get_universe_matrix(session=session)
