@@ -6,7 +6,6 @@ owns only the request/response shape and delegates here.
 """
 
 import asyncio
-import sys
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any

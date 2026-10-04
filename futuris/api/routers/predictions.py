@@ -1,35 +1,31 @@
 """Universal FRIDAY Universe prediction router serving all 9 ecosystem subsystems."""
 
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from futuris.api.deps import get_db_session, get_forecast_repo
 from futuris.core.enums import ForecastStatus
 from futuris.core.schemas import Forecast
 from futuris.core.universe_forecasting import (
+    REFRESH_BUDGET_SECONDS,
     generate_universe_forecast,
     refresh_all_within_budget,
     refresh_missing_within_budget,
 )
 from futuris.core.universe_domains import (
     UNIVERSE_TARGETS,
-    DomainTargetSpec,
     RiskLevel,
     UniverseDomain,
     evaluate_risk_level,
     get_target_spec,
 )
-from futuris.ecosystem.adapters import ecosystem_adapter
-from futuris.infra.config import settings
 from futuris.infra.logging import get_logger
-from futuris.storage.models import ForecastModel
 from futuris.storage.repositories import ForecastRepository
 
 
@@ -166,16 +162,44 @@ async def get_universe_matrix(
     session: AsyncSession = Depends(get_db_session),
 ) -> UniverseMatrixResponse:
     """Aggregates real-time risk posture and latest forecasts across all 9 FRIDAY Universe pillars."""
+    return await build_universe_matrix(session)
+
+
+def _as_of_key(forecast: Forecast) -> datetime:
+    """Sort key tolerating the two shapes ``as_of`` arrives in.
+
+    Forecasts written during this request stay in the session's identity map as
+    tz-aware datetimes; rows this session did not write are read back from
+    SQLite without an offset. Sorting the two together raises TypeError, which is
+    reachable whenever a refresh is only part-completed -- for example when the
+    peer is slow enough for the budget to stop the pass partway -- because the
+    untouched targets keep their older, naive forecasts.
+    """
+    return forecast.as_of if forecast.as_of.tzinfo else forecast.as_of.replace(tzinfo=UTC)
+
+
+async def build_universe_matrix(
+    session: AsyncSession,
+    *,
+    budget_seconds: float = REFRESH_BUDGET_SECONDS,
+) -> UniverseMatrixResponse:
+    """Aggregate risk posture and the latest forecast for every registered target.
+
+    ``budget_seconds`` bounds only the backfill of targets that have no active
+    forecast; the reads and the assembly that follow are cheap.
+    """
     repo = ForecastRepository(session)
     active_forecasts = await repo.list_by_status(ForecastStatus.ACTIVE)
 
     # Index latest forecast by target
     latest_by_target: dict[str, Forecast] = {}
-    for f in sorted(active_forecasts, key=lambda x: x.as_of):
+    for f in sorted(active_forecasts, key=_as_of_key):
         latest_by_target[f.target] = f
 
     # Ensure all registered targets have a forecast represented
-    await refresh_missing_within_budget(session, latest_by_target)
+    await refresh_missing_within_budget(
+        session, latest_by_target, budget_seconds=budget_seconds
+    )
 
     # Group by domain
     domain_map: dict[UniverseDomain, list[TargetPostureItem]] = {d: [] for d in UniverseDomain}
@@ -280,5 +304,10 @@ async def refresh_universe_predictions(
 ) -> UniverseMatrixResponse:
     """Trigger recalculation across all 9 FRIDAY Universe pillars with fresh telemetry and IntelX context."""
     logger.info("refreshing_all_universe_predictions_started")
+    started = time.monotonic()
     await refresh_all_within_budget(session)
-    return await get_universe_matrix(session=session)
+    # One request carries one budget. The matrix pass shares the deadline this
+    # request already started, otherwise a degraded peer costs the full budget
+    # once for the refresh and again for the backfill.
+    remaining = max(0.0, REFRESH_BUDGET_SECONDS - (time.monotonic() - started))
+    return await build_universe_matrix(session, budget_seconds=remaining)
