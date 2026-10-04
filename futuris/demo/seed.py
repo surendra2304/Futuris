@@ -73,11 +73,11 @@ class DemoSeeder:
         session.add(active_m)
         await session.flush()
 
-        from futuris.api.routers.predictions import _generate_universe_forecast
+        from futuris.core.universe_forecasting import generate_universe_forecast
         from futuris.core.universe_domains import UNIVERSE_TARGETS
 
         if fast_mode:
-            live_forecast = await _generate_universe_forecast(
+            live_forecast = await generate_universe_forecast(
                 target, session=session, skip_intelx=True
             )
         else:
@@ -95,7 +95,7 @@ class DemoSeeder:
         # 3.1 Seed Complete FRIDAY Universe Predictive Matrix across all 9 subsystems
         for u_target in UNIVERSE_TARGETS:
             if u_target != target:
-                await _generate_universe_forecast(u_target, session=session, skip_intelx=True)
+                await generate_universe_forecast(u_target, session=session, skip_intelx=True)
 
         # 4. Generate Family of Scenarios
         scenario_engine = ScenarioEngine(scenario_repo=s_repo)
