@@ -236,29 +236,30 @@ async def generate_universe_forecast(
 async def _paced_pass(
     session: AsyncSession,
     targets: list[str],
-    started: float,
     budget_seconds: float,
+    sink: dict[str, Any] | None = None,
 ) -> int:
-    """Refresh ``targets`` in order, stopping once ``budget_seconds`` is spent.
+    """Generate a forecast for each target in order, within ``budget_seconds``.
 
-    Targets are refreshed in sequence rather than concurrently because each one
-    persists through the caller's session. Returns how many were refreshed; a
-    target that exhausts the budget stops the pass so the caller waits a bounded
-    time instead of one client timeout per target.
+    Sequential rather than concurrent because each forecast persists through the
+    caller's session. ``sink``, when given, collects the forecasts by target.
+    Returns how many were generated; a target that exhausts the budget stops the
+    pass, so the caller waits a bounded time instead of one client timeout each.
     """
-    refreshed = 0
+    started = time.monotonic()
+    generated = 0
 
     for target in targets:
         remaining = budget_seconds - (time.monotonic() - started)
         if remaining <= 0:
             logger.info(
                 "refresh_budget_exhausted",
-                refreshed=refreshed,
-                pending=len(targets) - refreshed,
+                generated=generated,
+                pending=len(targets) - generated,
             )
             break
         try:
-            await asyncio.wait_for(
+            forecast = await asyncio.wait_for(
                 generate_universe_forecast(target, session=session),
                 timeout=remaining,
             )
@@ -269,9 +270,11 @@ async def _paced_pass(
                 budget_seconds=budget_seconds,
             )
             break
-        refreshed += 1
+        if sink is not None:
+            sink[target] = forecast
+        generated += 1
 
-    return refreshed
+    return generated
 
 
 async def refresh_all_within_budget(
@@ -280,9 +283,7 @@ async def refresh_all_within_budget(
     budget_seconds: float = REFRESH_BUDGET_SECONDS,
 ) -> int:
     """Regenerate the forecast for every universe target, within the budget."""
-    return await _paced_pass(
-        session, list(UNIVERSE_TARGETS), time.monotonic(), budget_seconds
-    )
+    return await _paced_pass(session, list(UNIVERSE_TARGETS), budget_seconds)
 
 
 async def refresh_missing_within_budget(
@@ -293,34 +294,7 @@ async def refresh_missing_within_budget(
 ) -> int:
     """Backfill universe targets that have no active forecast yet.
 
-    ``present`` is updated in place with each target that gets a forecast, so a
-    caller assembles the matrix straight from it.
+    ``present`` is updated in place so a caller can assemble the matrix from it.
     """
-    missing = [target for target in UNIVERSE_TARGETS if target not in present]
-    started = time.monotonic()
-    generated = 0
-
-    for target in missing:
-        remaining = budget_seconds - (time.monotonic() - started)
-        if remaining <= 0:
-            logger.info(
-                "refresh_missing_budget_exhausted",
-                generated=generated,
-                pending=len(missing) - generated,
-            )
-            break
-        try:
-            present[target] = await asyncio.wait_for(
-                generate_universe_forecast(target, session=session),
-                timeout=remaining,
-            )
-        except (TimeoutError, asyncio.TimeoutError):
-            logger.warning(
-                "refresh_missing_target_timed_out",
-                target=target,
-                budget_seconds=budget_seconds,
-            )
-            break
-        generated += 1
-
-    return generated
+    missing = [t for t in UNIVERSE_TARGETS if t not in present]
+    return await _paced_pass(session, missing, budget_seconds, sink=present)
