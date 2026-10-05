@@ -56,7 +56,7 @@ class Settings(BaseSettings):
         description="Whether API key authentication is enforced on API endpoints (always True).",
     )
     INFERENCE_URL: str = Field(
-        default="https://inference-r1sn.onrender.com",
+        default="https://inference-h7bn.onrender.com",
         description="Live Inference Gateway URL",
     )
     INFERENCE_API_KEY: str | None = Field(
