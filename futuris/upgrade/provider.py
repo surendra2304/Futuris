@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Any
+from typing import Any
 
 from .models import FailureKind, ProviderResult
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, provider: str, failure: FailureKind, message: str, *, retryable: bool) -> None:
+    def __init__(
+        self, provider: str, failure: FailureKind, message: str, *, retryable: bool
+    ) -> None:
         super().__init__(message)
         self.provider = provider
         self.failure = failure
@@ -37,7 +39,9 @@ class ProviderCircuit:
         async with self._lock:
             now = time.monotonic()
             if now < self.health.cooldown_until:
-                raise ProviderError("circuit", FailureKind.PROVIDER_UNAVAILABLE, "provider cooldown", retryable=True)
+                raise ProviderError(
+                    "circuit", FailureKind.PROVIDER_UNAVAILABLE, "provider cooldown", retryable=True
+                )
 
     async def record_success(self) -> None:
         async with self._lock:
@@ -68,27 +72,39 @@ class ProviderAdapter:
             output = await self.call(**kwargs)
             await self.circuit.record_success()
             return ProviderResult.success(
-                self.name, output, latency_ms=(time.perf_counter() - started) * 1000, request_id=request_id
+                self.name,
+                output,
+                latency_ms=(time.perf_counter() - started) * 1000,
+                request_id=request_id,
             )
         except asyncio.CancelledError:
             raise
         except TimeoutError:
             await self.circuit.record_failure()
             return ProviderResult.failure_result(
-                self.name, FailureKind.TIMEOUT, retryable=True,
-                latency_ms=(time.perf_counter() - started) * 1000, request_id=request_id,
+                self.name,
+                FailureKind.TIMEOUT,
+                retryable=True,
+                latency_ms=(time.perf_counter() - started) * 1000,
+                request_id=request_id,
             )
         except PermissionError:
             await self.circuit.record_failure()
             return ProviderResult.failure_result(
-                self.name, FailureKind.AUTHENTICATION, retryable=False,
-                latency_ms=(time.perf_counter() - started) * 1000, request_id=request_id,
+                self.name,
+                FailureKind.AUTHENTICATION,
+                retryable=False,
+                latency_ms=(time.perf_counter() - started) * 1000,
+                request_id=request_id,
             )
         except ValueError:
             await self.circuit.record_failure()
             return ProviderResult.failure_result(
-                self.name, FailureKind.INVALID_REQUEST, retryable=False,
-                latency_ms=(time.perf_counter() - started) * 1000, request_id=request_id,
+                self.name,
+                FailureKind.INVALID_REQUEST,
+                retryable=False,
+                latency_ms=(time.perf_counter() - started) * 1000,
+                request_id=request_id,
             )
         except Exception as exc:
             await self.circuit.record_failure()

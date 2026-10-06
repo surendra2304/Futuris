@@ -80,7 +80,7 @@ def forecast(
         typer.echo(f"Target:         {f.target}")
         typer.echo(f"Prediction:     {f.prediction:.2f} rpm")
         typer.echo(f"Range:          [{f.range_lower:.2f}, {f.range_upper:.2f}]")
-        typer.echo(f"Probability:    {(f.probability or 0.0)*100:.1f}%")
+        typer.echo(f"Probability:    {(f.probability or 0.0) * 100:.1f}%")
         typer.echo(f"Confidence:     {f.confidence.value.upper()}")
         typer.echo(f"Model Version:  {f.model_version}")
         typer.echo(f"Urgency:        {result.implications.urgency.upper()}")
@@ -206,14 +206,16 @@ def demo(
         typer.echo(f"Ingested Points:       {res['telemetry_points']}")
         typer.echo(f"Live Forecast ID:      {res['live_forecast_id']}")
         typer.echo(f"Live Prediction:       {res['live_prediction']:.2f} rpm")
-        typer.echo(f"Event Probability:     {(res['live_probability'] or 0.0)*100:.1f}%")
+        typer.echo(f"Event Probability:     {(res['live_probability'] or 0.0) * 100:.1f}%")
         typer.echo(f"Meta-Confidence:       {res['live_confidence'].upper()}")
         typer.echo(f"Scenarios Evaluated:   {res['scenarios_evaluated']}")
         typer.echo(f"Backtest Evaluations:  {res['backtest_runs']}")
         typer.echo(f"Resolved Outcomes:     {res['resolved_outcomes']}")
         typer.echo(f"Expected Calib Error:  {res['calibration_ece']:.4f}")
         typer.echo("==================================================")
-        typer.echo("Ready to explore! Start server via 'futuris serve' and open http://127.0.0.1:8000/ui")
+        typer.echo(
+            "Ready to explore! Start server via 'futuris serve' and open http://127.0.0.1:8000/ui"
+        )
 
     asyncio.run(_run())
 

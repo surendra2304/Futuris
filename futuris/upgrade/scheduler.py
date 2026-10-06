@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Awaitable, Callable
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,11 @@ class DistributedLeaseTable:
             if current and current.expires_at > now and current.owner != owner:
                 return False
             self._leases[job_id] = JobLease(
-                job_id, owner, now, now.replace(microsecond=0) + __import__("datetime").timedelta(seconds=lease_seconds)
+                job_id,
+                owner,
+                now,
+                now.replace(microsecond=0)
+                + __import__("datetime").timedelta(seconds=lease_seconds),
             )
             return True
 

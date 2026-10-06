@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from .models import ActionRisk
 
 
-class ToolDenied(PermissionError):
+class ToolDeniedError(PermissionError):
     pass
 
 
@@ -47,3 +48,7 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return sorted(self._tools)
+
+
+# Backwards-compatible alias: older call sites import the short name.
+ToolDenied = ToolDeniedError

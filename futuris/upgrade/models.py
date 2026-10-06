@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -12,7 +12,7 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-class JobState(str, Enum):
+class JobState(StrEnum):
     CREATED = "created"
     QUEUED = "queued"
     RUNNING = "running"
@@ -22,7 +22,7 @@ class JobState(str, Enum):
     CANCELLED = "cancelled"
 
 
-class FailureKind(str, Enum):
+class FailureKind(StrEnum):
     TRANSIENT = "transient"
     RATE_LIMITED = "rate_limited"
     AUTHENTICATION = "authentication"
@@ -34,7 +34,7 @@ class FailureKind(str, Enum):
     INTERNAL = "internal"
 
 
-class ActionRisk(str, Enum):
+class ActionRisk(StrEnum):
     OBSERVE = "observe"
     ADVISORY = "advisory"
     GOVERNED = "governed"
@@ -77,13 +77,19 @@ class ProviderResult:
     usage: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def success(cls, provider: str, output: Any, **kwargs: Any) -> "ProviderResult":
+    def success(cls, provider: str, output: Any, **kwargs: Any) -> ProviderResult:
         return cls(provider=provider, ok=True, output=output, **kwargs)
 
     @classmethod
     def failure_result(
-        cls, provider: str, failure: FailureKind, *, retryable: bool, output: Any = None, **kwargs: Any
-    ) -> "ProviderResult":
+        cls,
+        provider: str,
+        failure: FailureKind,
+        *,
+        retryable: bool,
+        output: Any = None,
+        **kwargs: Any,
+    ) -> ProviderResult:
         return cls(
             provider=provider,
             ok=False,

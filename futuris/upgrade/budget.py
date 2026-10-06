@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 
-class BudgetExceeded(RuntimeError):
+class BudgetExceededError(RuntimeError):
     pass
 
 
@@ -21,7 +21,7 @@ class BudgetLedger:
 
 
 class BudgetManager:
-    """Concurrency-safe in-process budget ledger; replace store with transactional DB/Redis in prod."""
+    """Concurrency-safe in-process budget ledger; back it with a DB in production."""
 
     def __init__(self) -> None:
         self._ledgers: dict[tuple[str, str], BudgetLedger] = {}
@@ -59,3 +59,7 @@ class BudgetManager:
         async with self._lock:
             source = self._ledgers[(tenant_id, run_id)]
             return BudgetLedger(source.limit, source.reserved, source.spent)
+
+
+# Backwards-compatible alias: older call sites import the short name.
+BudgetExceeded = BudgetExceededError

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 
-class PolicyViolation(RuntimeError):
+class PolicyViolationError(RuntimeError):
     pass
 
 
@@ -72,3 +72,7 @@ class PolicyEngine:
         except socket.gaierror as exc:
             raise PolicyViolation("DNS resolution failed") from exc
         return PolicyDecision(True, "allowed", "network")
+
+
+# Backwards-compatible alias: older call sites import the short name.
+PolicyViolation = PolicyViolationError

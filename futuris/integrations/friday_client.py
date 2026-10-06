@@ -70,9 +70,7 @@ class FridayClient:
             payload["required_confidence"] = required_confidence.value
 
         url = f"{self.base_url}/v1/forecasts"
-        async with httpx.AsyncClient(
-            transport=self.transport, base_url=self.base_url
-        ) as client:
+        async with httpx.AsyncClient(transport=self.transport, base_url=self.base_url) as client:
             resp = await client.post(url, json=payload, headers=self._headers())
             resp.raise_for_status()
             return ForecastResponse.model_validate(resp.json())
@@ -89,9 +87,7 @@ class FridayClient:
             "use_monte_carlo": use_monte_carlo,
         }
         url = f"{self.base_url}/v1/forecasts/{forecast_id}/scenarios/compare"
-        async with httpx.AsyncClient(
-            transport=self.transport, base_url=self.base_url
-        ) as client:
+        async with httpx.AsyncClient(transport=self.transport, base_url=self.base_url) as client:
             resp = await client.post(url, json=payload, headers=self._headers())
             resp.raise_for_status()
             return ScenarioComparison.model_validate(resp.json())
@@ -108,9 +104,7 @@ class FridayClient:
             "event_types": [e.value for e in types],
         }
         sub_url = f"{self.base_url}/v1/webhooks"
-        async with httpx.AsyncClient(
-            transport=self.transport, base_url=self.base_url
-        ) as client:
+        async with httpx.AsyncClient(transport=self.transport, base_url=self.base_url) as client:
             resp = await client.post(sub_url, json=payload, headers=self._headers())
             resp.raise_for_status()
             return resp.json()

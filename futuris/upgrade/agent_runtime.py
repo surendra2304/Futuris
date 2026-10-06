@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Awaitable, Callable
 
 from .cancellation import CancellationToken
-from .models import FailureKind, JobState
-from .retry import retry_async
+from .models import JobState
 from .state import StateMachine
 
 

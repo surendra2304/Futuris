@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from .models import JobState
 
 
-class InvalidTransition(RuntimeError):
+class InvalidTransitionError(RuntimeError):
     pass
 
 
@@ -47,3 +47,7 @@ class StateMachine:
     async def snapshot(self) -> VersionedState:
         async with self._lock:
             return VersionedState(self._state.state, self._state.version, self._state.updated_at)
+
+
+# Backwards-compatible alias: older call sites import the short name.
+InvalidTransition = InvalidTransitionError

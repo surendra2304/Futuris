@@ -43,7 +43,18 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "A", "C4", "T20", "RET", "SIM", "ARG"]
-ignore = ["B008"]
+ignore = ["B008"]  # FastAPI dependency defaults are function calls by design
+
+[tool.ruff.lint.per-file-ignores]
+# Tests intentionally declare fixtures and protocol stubs whose arguments are
+# unused by the stand-in implementation.
+"tests/**" = ["ARG001", "ARG002", "ARG005"]
+# Scripts print to stdout as their user interface, and some adjust sys.path
+# before importing project modules.
+"scripts/**" = ["T201", "ARG001", "ARG002", "ARG005", "E402"]
+# Alembic migration modules import the dialect types they need at module level
+# and are executed by Alembic rather than imported normally.
+"alembic/**" = ["E402"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
