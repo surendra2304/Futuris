@@ -20,14 +20,34 @@ sync_db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql
 config.set_main_option("sqlalchemy.url", sync_db_url)
 
 
+def _is_sqlite(url: str | None) -> bool:
+    return bool(url) and url.startswith("sqlite")
+
+
+def _configure_kwargs(connection: Connection | None = None) -> dict:
+    """Dialect-appropriate Alembic context settings.
+
+    SQLite cannot ALTER a column or add a constraint in place, so migrations
+    run in batch ("recreate") mode there; Postgres keeps normal ALTERs.
+    """
+    is_sqlite = _is_sqlite(config.get_main_option("sqlalchemy.url")) or (
+        connection is not None and connection.dialect.name == "sqlite"
+    )
+    return {
+        "target_metadata": target_metadata,
+        "compare_type": True,
+        "render_as_batch": is_sqlite,
+    }
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
-        target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        **_configure_kwargs(),
     )
 
     with context.begin_transaction():
@@ -35,7 +55,7 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(connection=connection, **_configure_kwargs(connection))
 
     with context.begin_transaction():
         context.run_migrations()

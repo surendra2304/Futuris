@@ -71,11 +71,26 @@ class ForecastModel(Base):
         JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
     )
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Provenance labels.  They were domain-only fields for a long time, so a
+    # forecast built from live Stratex telemetry read back as ``synthetic``
+    # after a round trip: the served label contradicted the stored evidence.
+    # Nullable on purpose -- rows written before this column existed have no
+    # recorded class and must degrade to the weakest label, never to ``live``.
+    evidence_class: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    evidence_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
     evidence_refs: Mapped[list["EvidenceRefModel"]] = relationship(
         "EvidenceRefModel",
         back_populates="forecast",
         cascade="all, delete-orphan",
         lazy="selectin",
+    )
+    # Declared so the unit of work orders ``INSERT INTO scenarios`` before
+    # ``INSERT INTO forecasts``: SQLAlchemy only derives cross-table flush
+    # ordering from relationships, and without this a scenario and its
+    # forecast created in the same flush would violate the ``scenario_id``
+    # foreign key (which is enforced for real, see ``futuris/storage/db.py``).
+    scenario: Mapped["ScenarioModel | None"] = relationship(
+        "ScenarioModel", foreign_keys="ForecastModel.scenario_id", lazy="raise"
     )
 
     __table_args__ = (
@@ -99,6 +114,7 @@ class EvidenceRefModel(Base):
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     snapshot_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     forecast: Mapped["ForecastModel"] = relationship(
         "ForecastModel", back_populates="evidence_refs"
@@ -158,6 +174,16 @@ class ForecastEventModel(Base):
     emitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
+    # The audit trail points at ``forecasts`` through a real, enforced foreign
+    # key.  SQLAlchemy derives cross-table flush ordering from relationships
+    # only, and unrelated mappers are ordered by ``(module, class name)`` -
+    # which puts ``ForecastEventModel`` *before* ``ForecastModel``.  Without
+    # this relationship the ``forecast_created`` event is flushed before its
+    # own forecast, so the insert dies with ``FOREIGN KEY constraint failed``
+    # and the forecast row is never written at all (the flush aborts).  The
+    # relationship exists purely to pin that ordering; it is never cascaded
+    # from or loaded lazily (``lazy="raise"`` keeps the audit trail explicit).
+    forecast: Mapped["ForecastModel | None"] = relationship("ForecastModel", lazy="raise")
 
 
 class IntelXNoticeModel(Base):
@@ -192,9 +218,7 @@ class ObservationModel(Base):
         JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
     )
 
-    __table_args__ = (
-        Index("ix_observations_series_time", "series_id", "observed_at"),
-    )
+    __table_args__ = (Index("ix_observations_series_time", "series_id", "observed_at"),)
 
 
 class SignalSourceModel(Base):
@@ -239,6 +263,12 @@ class EvaluationRunModel(Base):
         JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # See the note on ``ForecastEventModel.forecast``: this relationship pins
+    # the flush order so ``model_registry`` is inserted before the runs that
+    # reference it when both are pending in the same flush.
+    model_registry: Mapped["ModelRegistryModel | None"] = relationship(
+        "ModelRegistryModel", lazy="raise"
+    )
 
 
 class ApiKeyModel(Base):
@@ -264,6 +294,4 @@ class AuditLogModel(Base):
     entity: Mapped[str] = mapped_column(String(128), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(255), nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, index=True
-    )
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

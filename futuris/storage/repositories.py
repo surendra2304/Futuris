@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from futuris.core.enums import (
     ConfidenceLevel,
+    EvidenceClass,
     ForecastEventType,
     ForecastStatus,
     ResolutionMethod,
@@ -59,6 +60,9 @@ class ForecastRepository:
                 as_of=e.as_of,
                 snapshot_path=e.snapshot_path,
                 content_hash=e.content_hash,
+                evidence_class=EvidenceClass(e.evidence_class)
+                if e.evidence_class
+                else EvidenceClass.SYNTHETIC,
             )
             for e in model.evidence_refs
         ]
@@ -95,6 +99,10 @@ class ForecastRepository:
             calibration_metrics=getattr(model, "calibration_metrics", {}) or {},
             model_metadata=getattr(model, "model_metadata", {}) or {},
             idempotency_key=getattr(model, "idempotency_key", None),
+            evidence_class=EvidenceClass(model.evidence_class)
+            if model.evidence_class
+            else EvidenceClass.SYNTHETIC,
+            evidence_source=model.evidence_source,
         )
 
     async def get_by_idempotency_key(self, idempotency_key: str) -> Forecast | None:
@@ -115,6 +123,7 @@ class ForecastRepository:
                 as_of=e.as_of,
                 snapshot_path=e.snapshot_path,
                 content_hash=e.content_hash,
+                evidence_class=e.evidence_class.value,
             )
             for e in forecast.evidence
         ]
@@ -151,6 +160,8 @@ class ForecastRepository:
             calibration_metrics=forecast.calibration_metrics or {},
             model_metadata=forecast.model_metadata or {},
             idempotency_key=idempotency_key or getattr(forecast, "idempotency_key", None),
+            evidence_class=forecast.evidence_class.value,
+            evidence_source=forecast.evidence_source,
             created_at=now,
             updated_at=now,
             evidence_refs=evidence_models,
@@ -177,7 +188,6 @@ class ForecastRepository:
     async def get_by_id(self, forecast_id: UUID) -> Forecast | None:
         """Alias for get(forecast_id)."""
         return await self.get(forecast_id)
-
 
     async def list_by_target(
         self, target: str, as_of_range: tuple[datetime, datetime] | None = None
@@ -220,32 +230,61 @@ class ForecastRepository:
         return await self.get(forecast_id)
 
     async def point_in_time_query(self, target: str, query_time: datetime) -> Forecast | None:
-        """Query the state of the latest forecast for a target as it existed at query_time.
+        """Reconstruct the latest forecast for a target as it existed at query_time.
 
-        Uses the append-only events log to reconstruct true historical state without
-        leaking any subsequent mutations or status updates.
+        The reconstruction walks the append-only event log: the most recent
+        ``forecast_created`` event for the target supplies the forecast body, and
+        every later lifecycle event for the same forecast that had already been
+        emitted by ``query_time`` is applied to its status. Returning the
+        creation snapshot unmodified would report a forecast as ``active`` even
+        after it was invalidated.
         """
-        # Find events targeting this target emitted on or before query_time
-        stmt = (
+        created_stmt = (
             select(ForecastEventModel)
-            .where(ForecastEventModel.emitted_at <= query_time)
+            .where(
+                ForecastEventModel.event_type == ForecastEventType.FORECAST_CREATED.value,
+                ForecastEventModel.emitted_at <= query_time,
+            )
             .order_by(ForecastEventModel.emitted_at.desc())
+            .limit(200)
         )
-        result = await self.session.execute(stmt)
-        events = result.scalars().all()
+        created_events = (await self.session.execute(created_stmt)).scalars().all()
 
         matching_event: ForecastEventModel | None = None
-        for ev in events:
-            if ev.payload.get("target") == target:
-                matching_event = ev
+        for event in created_events:
+            if event.payload.get("target") == target:
+                matching_event = event
                 break
 
-        if not matching_event:
+        if matching_event is None:
             return None
 
-        # Reconstruct forecast from historical snapshot payload
-        data = dict(matching_event.payload)
-        return Forecast.model_validate(data)
+        snapshot = Forecast.model_validate(dict(matching_event.payload))
+        snapshot.forecast_id = matching_event.forecast_id
+
+        lifecycle_stmt = (
+            select(ForecastEventModel)
+            .where(
+                ForecastEventModel.forecast_id == matching_event.forecast_id,
+                ForecastEventModel.emitted_at <= query_time,
+                ForecastEventModel.emitted_at >= matching_event.emitted_at,
+            )
+            .order_by(ForecastEventModel.emitted_at.asc())
+        )
+        lifecycle_events = (await self.session.execute(lifecycle_stmt)).scalars().all()
+        for event in lifecycle_events:
+            if event.event_type == ForecastEventType.FORECAST_UPDATED.value:
+                new_status = event.payload.get("new_status")
+                if new_status:
+                    snapshot.status = ForecastStatus(new_status)
+            elif event.event_type == ForecastEventType.FORECAST_INVALIDATED.value:
+                snapshot.status = ForecastStatus.INVALIDATED
+            elif event.event_type == ForecastEventType.FORECAST_OUTCOME_RECORDED.value:
+                snapshot.status = ForecastStatus.RESOLVED
+            elif event.event_type == ForecastEventType.FORECAST_CANCELLED.value:
+                snapshot.status = ForecastStatus.CANCELLED
+
+        return snapshot
 
 
 class OutcomeRepository:
@@ -304,6 +343,22 @@ class OutcomeRepository:
     async def get_by_forecast(self, forecast_id: UUID) -> Outcome | None:
         return await self.get_for_forecast(forecast_id)
 
+    async def list_resolved_with_forecasts(
+        self, target_prefix: str | None = None, limit: int = 5000
+    ) -> list[tuple[Forecast, Outcome]]:
+        """Pair resolved outcomes with the forecasts they resolved, oldest first."""
+        stmt = (
+            select(OutcomeModel, ForecastModel)
+            .join(ForecastModel, OutcomeModel.forecast_id == ForecastModel.forecast_id)
+            .order_by(OutcomeModel.resolved_at.asc())
+            .limit(limit)
+        )
+        if target_prefix:
+            stmt = stmt.where(ForecastModel.target.like(f"{target_prefix}%"))
+        rows = (await self.session.execute(stmt)).all()
+        forecast_repo = ForecastRepository(self.session)
+        return [(forecast_repo._to_domain(fm), self._to_domain(om)) for om, fm in rows]
+
     async def list_all(self, limit: int = 1000) -> list[Outcome]:
         stmt = select(OutcomeModel).order_by(OutcomeModel.resolved_at.desc()).limit(limit)
         result = await self.session.execute(stmt)
@@ -311,10 +366,7 @@ class OutcomeRepository:
 
     async def list_unresolved(self, past_horizon: bool = True) -> list[Forecast]:
         now = datetime.now(UTC)
-        stmt = (
-            select(ForecastModel)
-            .where(ForecastModel.status == ForecastStatus.ACTIVE.value)
-        )
+        stmt = select(ForecastModel).where(ForecastModel.status == ForecastStatus.ACTIVE.value)
         if past_horizon:
             stmt = stmt.where(ForecastModel.expires_at <= now)
 
@@ -431,9 +483,7 @@ class EventRepository:
 
     async def list_all(self, limit: int = 100) -> list[ForecastEvent]:
         stmt = (
-            select(ForecastEventModel)
-            .order_by(ForecastEventModel.emitted_at.desc())
-            .limit(limit)
+            select(ForecastEventModel).order_by(ForecastEventModel.emitted_at.desc()).limit(limit)
         )
         result = await self.session.execute(stmt)
         return [
@@ -608,6 +658,23 @@ class EvaluationRepository:
         self.session.add(model)
         await self.session.flush()
         return run_id
+
+    async def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return the most recent persisted evaluation runs."""
+        stmt = (
+            select(EvaluationRunModel).order_by(EvaluationRunModel.created_at.desc()).limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return [
+            {
+                "run_id": run.run_id,
+                "model_version": run.model_version,
+                "dataset_name": run.dataset_name,
+                "metrics": run.metrics,
+                "created_at": run.created_at,
+            }
+            for run in result.scalars().all()
+        ]
 
     async def latest_for_model(self, model_version: str) -> dict[str, Any] | None:
         stmt = (
