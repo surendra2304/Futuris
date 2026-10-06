@@ -1,5 +1,5 @@
-import time
 import hmac
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -10,19 +10,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from futuris.api.deps import get_db_session, get_event_repo, get_outcome_repo
-from futuris.core.decision import (
-    AuthorizationViolationError,
-    validate_prediction_authorization_separation,
-)
 from futuris.core.enums import (
-    ConfidenceLevel,
+    EvidenceClass,
     ForecastEventType,
     ForecastStatus,
     ResolutionMethod,
     ScenarioType,
 )
 from futuris.core.pipeline import ForecastingPipeline
-from futuris.core.schemas import ForecastEvent, Outcome
+from futuris.core.schemas import Driver, ForecastEvent, Outcome
 from futuris.evaluation.calibration import CalibrationAnalyzer, update_calibration_metrics
 from futuris.features.normalize import (
     DataStalenessError,
@@ -31,8 +27,9 @@ from futuris.features.normalize import (
     check_insufficient_data,
 )
 from futuris.infra.audit import AuditLogger
-from futuris.infra.auth import AuthUser, get_current_user
+from futuris.infra.auth import AuthUser
 from futuris.infra.config import settings
+from futuris.infra.research_context import fetch_research_reports, finding_labels
 from futuris.scenarios.engine import ScenarioEngine
 from futuris.scenarios.spec import ScenarioSpec
 from futuris.storage.models import ForecastModel
@@ -45,6 +42,9 @@ from futuris.storage.repositories import (
 from futuris.upgrade.rate_limit import InMemoryRateLimitBackend
 
 router = APIRouter(prefix="/v1/friday", tags=["FRIDAY Delegation"])
+
+#: Minimum accepted credential length for the delegation guard.
+MIN_API_KEY_CHARS = 32
 
 friday_limiter = InMemoryRateLimitBackend()
 
@@ -59,12 +59,17 @@ async def verify_friday_auth(
     # Every other agent names the caller's credential <AGENT>_API_KEY. Futuris was the
     # sole exception, so a deployment configured to the fleet convention left this guard
     # permanently unconfigured and every FRIDAY->Futuris call failed with a 503.
+    admin_key = os.getenv("FUTURIS_API_KEY") or settings.FUTURIS_API_KEY
+    # A deployment that has not issued a dedicated FRIDAY key still has its own
+    # master credential. Accepting that master key keeps delegation working for
+    # the operator while remaining fail-closed: with no credential configured
+    # at all the route refuses to serve.
     expected_key = (
         os.getenv("FUTURIS_FRIDAY_API_KEY")
         or os.getenv("FRIDAY_API_KEY")
         or settings.FUTURIS_FRIDAY_API_KEY
+        or admin_key
     )
-    admin_key = os.getenv("FUTURIS_API_KEY") or settings.FUTURIS_API_KEY
     auth_key = x_api_key
     if not auth_key and authorization:
         if authorization.startswith("Bearer "):
@@ -72,10 +77,26 @@ async def verify_friday_auth(
         else:
             auth_key = authorization.strip()
 
-    if not expected_key or len(expected_key) < 32:
+    if not expected_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="FRIDAY service authentication is not configured.",
+            detail=(
+                "FRIDAY service authentication is not configured. Set "
+                "FUTURIS_FRIDAY_API_KEY or FUTURIS_API_KEY."
+            ),
+        )
+    if len(expected_key) < MIN_API_KEY_CHARS:
+        # A configured-but-short key silently disabled delegation and then
+        # reported itself as "not configured", which sent operators looking for
+        # the wrong problem.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"The configured FRIDAY credential is {len(expected_key)} characters; "
+                f"at least {MIN_API_KEY_CHARS} are required. Generate one with "
+                "`python -m futuris.cli create-admin-key` and set "
+                "FUTURIS_FRIDAY_API_KEY to a high-entropy value."
+            ),
         )
     is_valid = bool(auth_key) and (
         hmac.compare_digest(auth_key, expected_key)
@@ -130,6 +151,40 @@ class FridayForecastRequest(BaseModel):
     allow_stale: bool = False
 
 
+def _honest_calibration(forecast: Any) -> tuple[float, dict[str, Any]]:
+    """Calibration score/metrics taken from measured data, or declared unmeasured.
+
+    The stored ``calibration_metrics`` are produced by the calibration analyzer
+    from resolved outcomes. When a target has never been resolved there is
+    nothing measured to report, and the response says so instead of showing a
+    plausible-looking constant.
+    """
+    metrics = dict(getattr(forecast, "calibration_metrics", None) or {})
+    raw_count = metrics.get("n_resolved_outcomes", metrics.get("sample_count", 0))
+    try:
+        resolved = int(raw_count or 0)
+    except (TypeError, ValueError):
+        resolved = 0
+    ece = metrics.get("ece", metrics.get("ece_score"))
+    has_ece = isinstance(ece, (int, float)) and not isinstance(ece, bool)
+
+    if resolved <= 0 or not has_ece:
+        # Nothing was measured for this target. Report only what is actually
+        # computable and say plainly that calibration is unmeasured.
+        uncalibrated: dict[str, Any] = {
+            "n_resolved_outcomes": resolved,
+            "calibration_status": "uncalibrated",
+        }
+        if isinstance(metrics.get("brier_score"), (int, float)):
+            uncalibrated["brier_score"] = metrics["brier_score"]
+        return 0.0, uncalibrated
+
+    return float(ece), {
+        **{k: v for k, v in metrics.items() if not isinstance(v, dict)},
+        "calibration_status": "measured",
+    }
+
+
 class FridayForecastResponse(BaseModel):
     futuris_forecast_id: UUID
     friday_request_id: str
@@ -147,6 +202,8 @@ class FridayForecastResponse(BaseModel):
     evidence_snapshot_id: str
     model_used: str
     drivers_identified: list[DriverItem]
+    evidence_class: EvidenceClass = EvidenceClass.SYNTHETIC
+    evidence_source: str | None = None
 
     @field_validator("prediction_is_not_authorization")
     @classmethod
@@ -159,7 +216,9 @@ class FridayForecastResponse(BaseModel):
     @classmethod
     def validate_no_commands(cls, v: list[str]) -> list[str]:
         if v:
-            raise ValueError("Invariant violation: Forecast responses must not contain executable commands")
+            raise ValueError(
+                "Invariant violation: Forecast responses must not contain executable commands"
+            )
         return v
 
 
@@ -196,7 +255,9 @@ class FridayTaskEnvelopeResponse(BaseModel):
     @classmethod
     def validate_no_commands(cls, v: list[str]) -> list[str]:
         if v:
-            raise ValueError("Invariant violation: Forecast responses must not contain executable commands")
+            raise ValueError(
+                "Invariant violation: Forecast responses must not contain executable commands"
+            )
         return v
 
 
@@ -242,7 +303,9 @@ class FridayScenarioResponse(BaseModel):
     @classmethod
     def validate_no_commands(cls, v: list[str]) -> list[str]:
         if v:
-            raise ValueError("Invariant violation: Scenario responses must not contain executable commands")
+            raise ValueError(
+                "Invariant violation: Scenario responses must not contain executable commands"
+            )
         return v
 
 
@@ -275,7 +338,13 @@ async def delegate_forecast(
     """Accept and orchestrate an operational forecast delegated from FRIDAY."""
     f_repo = ForecastRepository(session)
     raw_header_key = x_idempotency_key if isinstance(x_idempotency_key, str) else None
-    effective_idempotency_key = req.idempotency_key or raw_header_key
+    # Idempotency precedence: explicit key > X-Idempotency-Key header > the
+    # FRIDAY request id. FRIDAY retries a delegation with the same
+    # friday_request_id when it does not see a reply, so that id must never
+    # produce a second forecast.
+    effective_idempotency_key = (
+        req.idempotency_key or raw_header_key or f"friday_req:{req.friday_request_id}"
+    )
 
     # 1. Idempotency Check
     if effective_idempotency_key:
@@ -292,10 +361,13 @@ async def delegate_forecast(
                 DriverItem(
                     metric=d.name,
                     correlation=d.strength if d.direction == "increases_risk" else -d.strength,
-                    lead_time="2h (lag-2 peak)" if d.leading_or_lagging == "leading" else "0h (concurrent)",
+                    lead_time="2h (lag-2 peak)"
+                    if d.leading_or_lagging == "leading"
+                    else "0h (concurrent)",
                 )
                 for d in cached.drivers
             ]
+            _cal_score, _cal_metrics = _honest_calibration(cached)
             return FridayForecastResponse(
                 futuris_forecast_id=cached.forecast_id,
                 friday_request_id=req.friday_request_id,
@@ -307,15 +379,17 @@ async def delegate_forecast(
                 ),
                 confidence=cached.confidence.value.upper(),
                 status=cached.status.value,
-                calibration_score=0.042,
-                calibration_metrics=cached.calibration_metrics or {"ece": 0.042, "brier_score": 0.084},
+                calibration_score=_cal_score,
+                calibration_metrics=_cal_metrics,
                 predictive_distribution=cached.predictive_distribution or prob_dist,
                 intervals=cached.intervals or {"90%": (cached.range_lower, cached.range_upper)},
                 model_metadata=cached.model_metadata or {"model_version": cached.model_version},
                 prediction_is_not_authorization=True,
                 executable_commands=[],
                 assumptions=cached.assumptions or ["Cached idempotent response"],
-                evidence_snapshot_id=str(cached.evidence[0].evidence_id) if cached.evidence else "snap_cached",
+                evidence_snapshot_id=str(cached.evidence[0].evidence_id)
+                if cached.evidence
+                else "snap_cached",
                 model_used=cached.model_version,
                 drivers_identified=drivers,
             )
@@ -376,7 +450,14 @@ async def delegate_forecast(
                 drivers_identified=[],
             )
 
-    # 3. Pipeline Run
+    # 3. Research enrichment and pipeline run
+    # FRIDAY delegates the target, not the evidence: FUTURIS is expected to bring
+    # the ecosystem's research context to the forecast it returns. The fetch is
+    # bounded (1.5 s) and best-effort, so a slow or absent research agent
+    # degrades the enrichment, never the forecast.
+    reports = await fetch_research_reports(req.target, as_of=datetime.now(UTC))
+    research_findings = finding_labels(reports)
+
     pipeline = ForecastingPipeline()
     horizon_map = {
         "1h": timedelta(hours=1),
@@ -395,6 +476,26 @@ async def delegate_forecast(
     )
     f = result.forecast
     f.idempotency_key = effective_idempotency_key
+
+    # Research findings are attached as interpretability drivers and recorded in
+    # metadata. They do not move the statistical estimate: the prediction still
+    # comes from the pipeline, and its evidence class stays whatever the pipeline
+    # established (``synthetic`` for the configured telemetry generator).
+    for finding in research_findings[:2]:
+        f.drivers.append(
+            Driver(
+                name=finding,
+                direction="neutral",
+                strength=0.5,
+                leading_or_lagging="leading",
+                evidence_refs=[item.evidence_id for item in f.evidence][:1],
+            )
+        )
+    f.model_metadata = {
+        **(f.model_metadata or {}),
+        "intelx_context_included": bool(research_findings),
+        "research_reports_considered": len(reports),
+    }
 
     await f_repo.create(f, idempotency_key=effective_idempotency_key)
 
@@ -418,9 +519,9 @@ async def delegate_forecast(
         for d in f.drivers
     ]
 
-    snapshot_id = (
-        str(f.evidence[0].evidence_id) if f.evidence else "snap_synthetic_default"
-    )
+    snapshot_id = str(f.evidence[0].evidence_id) if f.evidence else "no_evidence_frozen"
+
+    _fresh_cal_score, _fresh_cal_metrics = _honest_calibration(f)
 
     prob = f.probability or 0.5
     prob_dist = f.predictive_distribution or {
@@ -441,11 +542,12 @@ async def delegate_forecast(
         ),
         confidence=f.confidence.value.upper(),
         status=f.status.value,
-        calibration_score=0.042,
-        calibration_metrics=f.calibration_metrics or {"ece": 0.042, "brier_score": 0.084, "samples": 200},
+        calibration_score=_fresh_cal_score,
+        calibration_metrics=_fresh_cal_metrics,
         predictive_distribution=f.predictive_distribution or prob_dist,
         intervals=f.intervals or {"90%": (f.range_lower, f.range_upper)},
-        model_metadata=f.model_metadata or {"model_version": f.model_version, "framework": "statsforecast"},
+        model_metadata=f.model_metadata
+        or {"model_version": f.model_version, "framework": "statsforecast"},
         prediction_is_not_authorization=True,
         executable_commands=[],
         assumptions=f.assumptions,
@@ -475,20 +577,54 @@ async def delegate_task(
     # Fail-closed if any mitigation execution, command execution, or website changes are requested
     forbidden_actions = {
         "execute",
+        "execute_shell",
+        "shell",
+        "exec",
+        "exec_command",
+        "command",
+        "bash",
+        "sh",
+        "run",
+        "run_command",
+        "script",
         "mitigate",
         "apply_mitigation",
+        "remediate",
+        "remediation",
+        "failover",
         "website_change",
         "scale",
         "scale_up",
-        "run_command",
-        "bash",
+        "scale_down",
         "deploy",
-        "exec",
-        "command",
+        "restart",
+        "stop",
+        "kill",
+        "delete",
+        "drop",
+        "write",
+        "write_file",
+        "upload",
+        "ssh",
+        "scp",
+        "patch",
+        "modify",
+        "mutate",
     }
     payload = envelope.payload or {}
     if action_lower in forbidden_actions or any(
-        k in payload for k in ["command", "commands", "script", "bash_command", "exec", "mitigation_command"]
+        k in payload
+        for k in [
+            "command",
+            "commands",
+            "cmd",
+            "script",
+            "bash_command",
+            "shell_command",
+            "exec",
+            "code",
+            "mitigation_command",
+        ]
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -550,7 +686,8 @@ async def delegate_task(
             action=envelope.action,
             status="SUCCESS",
             result=s_resp.model_dump(mode="json"),
-            summary=f"Scenario evaluated for base forecast '{base_id}'. Risk: {s_resp.risk_assessment}.",
+            summary="Scenario evaluated for base forecast '{base_id}'. Risk: "
+                "{s_resp.risk_assessment}.",
             prediction_is_not_authorization=True,
             executable_commands=[],
             execution_time_ms=lat,
@@ -672,19 +809,9 @@ async def evaluate_scenario(
         values = list(s_res.perturbed_values.values())
         div_pred = sum(values) / len(values)
 
-    delta_pct = (
-        ((div_pred - base.prediction) / base.prediction) * 100.0
-        if base.prediction
-        else 0.0
-    )
+    delta_pct = ((div_pred - base.prediction) / base.prediction) * 100.0 if base.prediction else 0.0
 
-    risk = (
-        "HIGH_RISK"
-        if delta_pct > 25.0
-        else "MODERATE_RISK"
-        if delta_pct > 10.0
-        else "NOMINAL"
-    )
+    risk = "HIGH_RISK" if delta_pct > 25.0 else "MODERATE_RISK" if delta_pct > 10.0 else "NOMINAL"
 
     # Audit Log
     audit_logger = AuditLogger(session)
@@ -693,7 +820,11 @@ async def evaluate_scenario(
         action="evaluate_scenario",
         entity="scenario",
         entity_id=str(s_res.spec.spec_id),
-        payload={"base_forecast_id": str(base.forecast_id), "risk_assessment": risk, "delta_pct": delta_pct},
+        payload={
+            "base_forecast_id": str(base.forecast_id),
+            "risk_assessment": risk,
+            "delta_pct": delta_pct,
+        },
     )
     await session.commit()
 
@@ -791,6 +922,16 @@ async def resolve_forecast(
             detail=f"Forecast '{req.forecast_id}' not found.",
         )
 
+    existing = await outcome_repo.get_by_forecast(req.forecast_id)
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Forecast {req.forecast_id} already has an outcome recorded at "
+                f"{existing.resolved_at.isoformat()}; outcomes are immutable."
+            ),
+        )
+
     res_method = ResolutionMethod.AUTOMATED_TELEMETRY
     if req.resolution_method.lower() in ("human", "manual"):
         res_method = ResolutionMethod.HUMAN
@@ -808,17 +949,30 @@ async def resolve_forecast(
     saved_outcome = await outcome_repo.record_outcome(outcome)
     await f_repo.update_status(req.forecast_id, ForecastStatus.RESOLVED)
 
-    # Compute updated calibration metrics
-    all_outcomes = await outcome_repo.list_all(limit=1000)
-    actuals = [bool(o.event_occurred) for o in all_outcomes if o.event_occurred is not None]
-    probs = [0.1 + (i * 0.15) % 0.8 for i in range(len(actuals))]
-    if forecast.probability is not None:
-        probs.append(forecast.probability)
-        actuals.append(
-            bool(req.event_occurred)
-            if req.event_occurred is not None
-            else (req.observed_value > 0.5)
-        )
+    await AuditLogger(session).log_mutation(
+        actor_label="friday_agent",
+        action="resolve_forecast",
+        entity="outcome",
+        entity_id=str(saved_outcome.outcome_id),
+        payload={
+            "forecast_id": str(req.forecast_id),
+            "observed_value": saved_outcome.observed_value,
+            "event_occurred": saved_outcome.event_occurred,
+            "resolution_method": saved_outcome.resolution_method.value,
+        },
+    )
+
+    # Recompute calibration from the real (predicted probability, outcome) pairs
+    # stored in this database. Inventing probabilities to pair with outcomes
+    # would make the calibration numbers describe a model that never ran.
+    paired = await outcome_repo.list_resolved_with_forecasts(limit=2000)
+    probs: list[float] = []
+    actuals: list[bool] = []
+    for paired_forecast, paired_outcome in paired:
+        if paired_forecast.probability is None or paired_outcome.event_occurred is None:
+            continue
+        probs.append(paired_forecast.probability)
+        actuals.append(bool(paired_outcome.event_occurred))
 
     cal_metrics = update_calibration_metrics(probs, actuals)
 
@@ -849,9 +1003,7 @@ async def resolve_forecast(
     await session.commit()
 
     error = (
-        abs(req.observed_value - forecast.prediction)
-        if forecast.prediction is not None
-        else 0.0
+        abs(req.observed_value - forecast.prediction) if forecast.prediction is not None else 0.0
     )
 
     return {
@@ -878,11 +1030,7 @@ async def list_friday_forecasts(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[dict[str, Any]]:
     """List active and recent forecasts with status and accuracy tracking."""
-    stmt = (
-        select(ForecastModel)
-        .order_by(ForecastModel.as_of.desc())
-        .limit(limit)
-    )
+    stmt = select(ForecastModel).order_by(ForecastModel.as_of.desc()).limit(limit)
     res = await session.execute(stmt)
     models = res.scalars().all()
 

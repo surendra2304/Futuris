@@ -24,8 +24,7 @@ from futuris.storage.repositories import (
     ForecastRepository,
     OutcomeRepository,
 )
-
-from futuris.upgrade.scheduler import DistributedLeaseTable, SafeScheduler, ScheduleSpec
+from futuris.upgrade.scheduler import DistributedLeaseTable, SafeScheduler
 
 logger = get_logger("futuris.scheduler")
 
@@ -70,6 +69,7 @@ class ForecastScheduler:
             ForecastSubscription(target="service:checkout:capacity_exceedance_24h")
         ]
         self._in_flight_tasks: set[asyncio.Task] = set()
+        self._mae_history: dict[str, list[float]] = {}
 
     def should_suppress_refresh_event(
         self,
@@ -155,9 +155,7 @@ class ForecastScheduler:
             connector = SyntheticTelemetryConnector(seed=42)
             obs = await connector.fetch(now - timedelta(days=2), now)
             df = pd.DataFrame([{"timestamp": o.observed_at, "value": o.value} for o in obs])
-            return await self.lifecycle_manager.run_lifecycle_sweep(
-                observations_df=df, as_of=now
-            )
+            return await self.lifecycle_manager.run_lifecycle_sweep(observations_df=df, as_of=now)
         return None
 
     async def backtest_nightly_job(self) -> None:
@@ -179,12 +177,24 @@ class ForecastScheduler:
             h_metrics = list(report.metrics_by_horizon.values())
             if h_metrics:
                 recent_mae = h_metrics[0].mae
-                hist_maes = [40.0, 42.0, 39.5, 41.0, 40.5]
-                await self.drift_monitor.check_and_emit(
-                    model_version="auto_arima@v1",
-                    historical_scores=hist_maes,
-                    recent_scores=[recent_mae],
-                )
+                # Drift is only detectable against real history: keep the MAEs
+                # this process has actually measured and wait for enough of
+                # them instead of comparing against invented baselines.
+                history = self._mae_history.setdefault(sub.target, [])
+                history.append(recent_mae)
+                window = history[-30:]
+                if len(window) >= 5:
+                    await self.drift_monitor.check_and_emit(
+                        model_version=getattr(sub, "model_version", None) or "unknown",
+                        historical_scores=window[:-1],
+                        recent_scores=[recent_mae],
+                    )
+                else:
+                    logger.info(
+                        "drift_check_skipped_insufficient_history",
+                        target=sub.target,
+                        samples=len(window),
+                    )
 
     def start(self) -> None:
         """Start scheduler with registered recurring jobs."""
@@ -195,9 +205,7 @@ class ForecastScheduler:
         self.scheduler.add_job(
             self.lifecycle_sweep_job, "interval", minutes=30, id="lifecycle_sweep_job"
         )
-        self.scheduler.add_job(
-            self.backtest_nightly_job, "cron", hour=2, id="backtest_nightly_job"
-        )
+        self.scheduler.add_job(self.backtest_nightly_job, "cron", hour=2, id="backtest_nightly_job")
         self.scheduler.start()
         logger.info("scheduler_started")
 

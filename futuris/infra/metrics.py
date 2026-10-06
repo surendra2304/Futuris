@@ -52,6 +52,55 @@ MODEL_ACCURACY_GAUGE = Gauge(
 )
 
 
+CPU_WORK_IN_FLIGHT = Gauge(
+    "cpu_work_in_flight",
+    "CPU-bound jobs currently running on the worker pool",
+    ["kind"],
+)
+
+MODEL_SELECTION_DEGRADED_TOTAL = Counter(
+    "model_selection_degraded_total",
+    "Forecasts whose candidate backtest was cut short, by reason",
+    ["reason"],
+)
+
+CPU_QUEUE_DEPTH = Gauge(
+    "cpu_queue_depth",
+    "Requests waiting for a CPU slot",
+)
+
+CPU_QUEUE_WAIT_SECONDS = Histogram(
+    "cpu_queue_wait_seconds",
+    "Time a request spent waiting for a CPU slot",
+    ["kind"],
+)
+
+
 def metrics_endpoint() -> Response:
     """Return prometheus formatted metrics payload."""
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+PEER_CALL_TOTAL = Counter(
+    "futuris_peer_calls_total",
+    "Outbound calls to peer agents by outcome (ok, failed, short_circuited).",
+    ["peer", "outcome"],
+)
+
+PEER_CIRCUIT_STATE = Gauge(
+    "futuris_peer_circuit_state",
+    "Circuit state per peer: 0 closed, 1 half-open, 2 open.",
+    ["peer"],
+)
+
+SELF_HEALING_ACTIONS_TOTAL = Counter(
+    "futuris_self_healing_actions_total",
+    "Recovery actions taken by the self-healing supervisor.",
+    ["action", "outcome"],
+)
+
+DEGRADED_SUBSYSTEMS = Gauge(
+    "futuris_degraded_subsystems",
+    "Number of subsystems the agent currently reports as degraded.",
+)
+

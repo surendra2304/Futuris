@@ -21,11 +21,26 @@ class AuthUser(BaseModel):
     """Authenticated identity and permissions."""
 
     label: str
-    role: str  # viewer | analyst | admin
+    role: str  # anonymous | viewer | analyst | admin
     principal_id: str = "principal_default"
     tenant_id: str = "tenant_default"
     scopes: list[str] = []
     credential_id: str | None = None
+    is_anonymous: bool = False
+
+
+# Explicit anonymous principal. Read-only routes that are intentionally public
+# (the dashboard) use it; every mutating route rejects it.
+ANONYMOUS_VIEWER = AuthUser(
+    label="anonymous",
+    role="anonymous",
+    principal_id="principal_anonymous",
+    tenant_id="tenant_public",
+    scopes=[],
+    is_anonymous=True,
+)
+
+ROLE_HIERARCHY = {"anonymous": 0, "viewer": 1, "analyst": 2, "admin": 3}
 
 
 def hash_api_key(plain_key: str) -> str:
@@ -44,7 +59,12 @@ async def get_current_user(
     raw_key: str | None = Security(api_key_header),
     session: AsyncSession = Depends(get_db_session),
 ) -> AuthUser:
-    """FastAPI dependency resolving and verifying the API Key from header."""
+    """FastAPI dependency resolving and verifying the API Key from header.
+
+    Missing credentials resolve to the explicit anonymous principal (never a
+    privileged one). Present-but-invalid credentials always fail with 401 --
+    an invalid key is never silently downgraded to anonymous access.
+    """
     # Check if auth enforcement is disabled in development
     if not getattr(settings, "API_KEYS_ENABLED", True) or getattr(settings, "AUTH_DISABLED", False):
         return AuthUser(
@@ -56,20 +76,11 @@ async def get_current_user(
         )
 
     if not raw_key:
-        # Unauthenticated calls (e.g. public dashboard or browser UI) default to read-only viewer role
-        return AuthUser(
-            label="public_viewer",
-            role="viewer",
-            principal_id="principal_public_viewer",
-            tenant_id="tenant_public",
-            scopes=["viewer"],
-        )
+        return ANONYMOUS_VIEWER
 
     # Clean Bearer prefix if passed via header
     clean_key = (
-        raw_key.replace("Bearer ", "").strip()
-        if raw_key.startswith("Bearer ")
-        else raw_key.strip()
+        raw_key.replace("Bearer ", "").strip() if raw_key.startswith("Bearer ") else raw_key.strip()
     )
 
     # Master API key check (e.g. FUTURIS_API_KEY from environment)
@@ -106,36 +117,42 @@ async def get_current_user(
     )
 
 
-async def require_viewer(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUser:
-    role_hierarchy = {"viewer": 1, "analyst": 2, "admin": 3}
-    if role_hierarchy.get(user.role, 0) < 1:
+def _require_role(user: AuthUser, minimum: int, role_name: str) -> AuthUser:
+    if ROLE_HIERARCHY.get(user.role, 0) < minimum:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions: requires minimum role 'viewer'",
+            detail=f"Insufficient permissions: requires minimum role '{role_name}'",
         )
     return user
+
+
+async def require_viewer(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUser:
+    """Require an authenticated credential with at least viewer privileges."""
+    return _require_role(user, 1, "viewer")
 
 
 async def require_analyst(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUser:
-    role_hierarchy = {"viewer": 1, "analyst": 2, "admin": 3}
-    if role_hierarchy.get(user.role, 0) < 2:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions: requires minimum role 'analyst'",
-        )
-    return user
+    """Require an authenticated credential with at least analyst privileges."""
+    return _require_role(user, 2, "analyst")
 
 
 async def require_admin(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUser:
-    role_hierarchy = {"viewer": 1, "analyst": 2, "admin": 3}
-    if role_hierarchy.get(user.role, 0) < 3:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions: requires minimum role 'admin'",
-        )
+    """Require an authenticated credential with admin privileges."""
+    return _require_role(user, 3, "admin")
+
+
+async def allow_anonymous_read(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> AuthUser:
+    """Permit the public read-only dashboard while still resolving real credentials.
+
+    Used only by read routes whose payload is intentionally public (forecast
+    records, registry metadata, calibration curves, peer probes).
+    """
     return user
 
 
 RequireViewer = Annotated[AuthUser, Depends(require_viewer)]
 RequireAnalyst = Annotated[AuthUser, Depends(require_analyst)]
 RequireAdmin = Annotated[AuthUser, Depends(require_admin)]
+AllowAnonymousRead = Annotated[AuthUser, Depends(allow_anonymous_read)]

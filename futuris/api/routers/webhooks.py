@@ -1,10 +1,12 @@
-﻿"""Inbound webhook router receiving research catalysts and external triggers."""
+"""Inbound webhook router receiving research catalysts and external triggers."""
 
+import hmac
+import os
 import re
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
@@ -19,6 +21,48 @@ logger = get_logger("futuris.api.webhooks")
 router = APIRouter(tags=["Webhooks and Research Catalysts"])
 
 
+def verify_inbound_webhook_auth(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    authorization: str | None = Header(default=None),
+) -> None:
+    """Authenticate inbound IntelX catalyst deliveries with a shared secret.
+
+    Senders present the same convention used elsewhere in the fleet: an API key
+    in ``X-API-Key`` or as a Bearer token. Configuration falls back from the
+    dedicated ``INTELX_WEBHOOK_API_KEY`` to the FRIDAY/master credentials so a
+    deployment already configured for the fleet keeps working. Authentication is
+    fail-closed: an unconfigured deployment rejects deliveries with 503 rather
+    than accepting unauthenticated writes.
+    """
+    from futuris.infra.config import settings
+
+    expected = (
+        os.getenv("INTELX_WEBHOOK_API_KEY")
+        or os.getenv("FUTURIS_FRIDAY_API_KEY")
+        or os.getenv("FUTURIS_API_KEY")
+        or settings.FUTURIS_FRIDAY_API_KEY
+        or settings.FUTURIS_API_KEY
+    )
+    if not expected or len(expected) < 32:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Inbound webhook authentication is not configured.",
+        )
+
+    supplied = x_api_key
+    if not supplied and authorization:
+        supplied = (
+            authorization[len("Bearer ") :].strip()
+            if authorization.startswith("Bearer ")
+            else authorization.strip()
+        )
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing inbound webhook credentials.",
+        )
+
+
 async def _forecast_repo_dependency():
     async with async_session_factory() as session:
         yield ForecastRepository(session)
@@ -26,8 +70,13 @@ async def _forecast_repo_dependency():
 
 class ResearchFindingEventData(BaseModel):
     run_id: str = Field(..., max_length=100, description="IntelX research run ID")
-    finding_summary: str = Field(..., min_length=1, max_length=8000, description="Key catalyst or finding text")
-    category: str = Field(default="market_moving", description="market_moving | regulatory_change | emerging_threat")
+    finding_summary: str = Field(
+        ..., min_length=1, max_length=8000, description="Key catalyst or finding text"
+    )
+    category: str = Field(
+        default="market_moving",
+        description="market_moving | regulatory_change | emerging_threat",
+    )
     confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     domain: str = Field(default="market")
     recommended_forecast_targets: list[str] = Field(default_factory=list)
@@ -74,21 +123,24 @@ async def _store_webhook_notice(payload: IntelXResearchWebhookPayload) -> tuple[
         "event_type": "intelx.news",
     }
     try:
-        await _persist_notice_to_memora(memora_event, {
-            "headline": payload.data.finding_summary[:2000],
-            "summary": payload.data.finding_summary,
-            "source_agent": "intelx",
-            "source_type": "web_scrape",
-            "category": payload.data.category,
-            "domain": payload.data.domain,
-            "relevance": {
+        await _persist_notice_to_memora(
+            memora_event,
+            {
+                "headline": payload.data.finding_summary[:2000],
+                "summary": payload.data.finding_summary,
+                "source_agent": "intelx",
+                "source_type": "web_scrape",
                 "category": payload.data.category,
                 "domain": payload.data.domain,
-                "confidence": payload.data.confidence,
+                "relevance": {
+                    "category": payload.data.category,
+                    "domain": payload.data.domain,
+                    "confidence": payload.data.confidence,
+                },
+                "recommended_forecast_targets": payload.data.recommended_forecast_targets,
+                "published_at": payload.data.timestamp,
             },
-            "recommended_forecast_targets": payload.data.recommended_forecast_targets,
-            "published_at": payload.data.timestamp,
-        })
+        )
     except Exception as exc:
         logger.warning("intelx_webhook_memora_store_failed", error=type(exc).__name__)
         raise HTTPException(
@@ -124,7 +176,7 @@ async def _store_webhook_notice(payload: IntelXResearchWebhookPayload) -> tuple[
                 raise HTTPException(
                     status_code=409,
                     detail="This IntelX run_id was already stored with different content.",
-                )
+                ) from None
         return event_id, False
     except HTTPException:
         raise
@@ -149,7 +201,8 @@ async def _set_processing_status(event_id: str, state: dict[str, Any]) -> None:
 @router.post(
     "/webhooks/research-finding-relevant",
     status_code=status.HTTP_200_OK,
-    summary="IntelX Catalyst Webhook Handler",
+    summary="IntelX Catalyst Webhook Handler (shared secret)",
+    dependencies=[Depends(verify_inbound_webhook_auth)],
 )
 async def handle_intelx_research_catalyst(
     payload: IntelXResearchWebhookPayload,
@@ -194,11 +247,17 @@ async def handle_intelx_research_catalyst(
                     intelx_catalyst=(event_id, data.finding_summary),
                 )
             except Exception as exc:
-                logger.warning("catalyst_reforecast_failed", event_id=event_id, error=type(exc).__name__)
+                logger.warning(
+                    "catalyst_reforecast_failed", event_id=event_id, error=type(exc).__name__
+                )
                 try:
                     await _set_processing_status(
                         event_id,
-                        {"status": "failed", "symbol": symbol, "error": type(exc).__name__},
+                        {
+                            "status": "failed",
+                            "symbol": symbol,
+                            "error": type(exc).__name__,
+                        },
                     )
                 except Exception as persist_exc:
                     logger.warning(
@@ -210,7 +269,11 @@ async def handle_intelx_research_catalyst(
 
             await _set_processing_status(
                 event_id,
-                {"status": "forecast_generated", "forecast_id": result.forecast_id, "symbol": symbol},
+                {
+                    "status": "forecast_generated",
+                    "forecast_id": result.forecast_id,
+                    "symbol": symbol,
+                },
             )
 
         background_tasks.add_task(_async_reforecast)

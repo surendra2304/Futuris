@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from futuris.api.deps import get_forecast_repo, get_scenario_repo
+from futuris.infra.auth import RequireAnalyst
 from futuris.scenarios.engine import (
     ScenarioComparison,
     ScenarioEngine,
@@ -29,9 +30,11 @@ class RunScenariosRequest(BaseModel):
 async def run_scenarios(
     forecast_id: UUID,
     req: RunScenariosRequest,
+    user: RequireAnalyst,
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
     scenario_repo: ScenarioRepository = Depends(get_scenario_repo),
 ) -> list[ScenarioResult]:
+    _ = user  # auth dependency; identity handled by the role guard
     """Execute scenario specifications against parent forecast without mutating base data."""
     f = await forecast_repo.get(forecast_id)
     if not f:
@@ -56,9 +59,11 @@ async def run_scenarios(
 async def compare_scenarios(
     forecast_id: UUID,
     req: RunScenariosRequest,
+    user: RequireAnalyst,
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
     scenario_repo: ScenarioRepository = Depends(get_scenario_repo),
 ) -> ScenarioComparison:
+    _ = user  # auth dependency; identity handled by the role guard
     """Run and compare diverging scenarios side-by-side with sensitivity ranking."""
     f = await forecast_repo.get(forecast_id)
     if not f:

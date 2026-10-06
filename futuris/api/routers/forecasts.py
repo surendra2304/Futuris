@@ -2,11 +2,11 @@
 
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from futuris.api.deps import (
     get_event_repo,
@@ -16,12 +16,14 @@ from futuris.api.deps import (
 from futuris.core.engine import ForecastEngine
 from futuris.core.enums import (
     ConfidenceLevel,
+    EvidenceClass,
     ForecastEventType,
     ForecastStatus,
     ResolutionMethod,
 )
 from futuris.core.schemas import Driver, EvidenceRef, ForecastEvent, Outcome
-from futuris.infra.auth import AuthUser, RequireAdmin, RequireAnalyst, RequireViewer
+from futuris.infra.audit import AuditLogger
+from futuris.infra.auth import AllowAnonymousRead, RequireAdmin, RequireAnalyst
 from futuris.scenarios.spec import ScenarioSpec
 from futuris.storage.repositories import (
     EventRepository,
@@ -35,19 +37,38 @@ from futuris.upgrade.quality import ForecastQualityGate
 router = APIRouter(prefix="/v1/forecasts", tags=["Forecasts"])
 
 
+MIN_HORIZON = timedelta(minutes=1)
+MAX_HORIZON = timedelta(days=365)
+
+
 def parse_horizon(horizon_str: str) -> timedelta:
-    """Parse horizon strings like '24h', '30m', '7d' into timedeltas."""
+    """Parse horizon strings like '24h', '30m', '7d' into timedeltas.
+
+    Bounded on purpose: an unbounded ``timedelta(days=n)`` overflows the C
+    integer type for values like ``99999999999999999999d``, which used to
+    surface as an opaque 500 (and would produce a nonsensical expiry date even
+    if it did fit).
+    """
     match = re.match(r"^(\d+)([mhd])$", horizon_str.lower().strip())
     if not match:
-        return timedelta(hours=24)
+        raise ValueError(
+            f"Invalid horizon '{horizon_str}'. Use <number><m|h|d>, e.g. '30m', '24h', '7d'."
+        )
     val, unit = int(match.group(1)), match.group(2)
-    if unit == "m":
-        return timedelta(minutes=val)
-    if unit == "h":
-        return timedelta(hours=val)
-    if unit == "d":
-        return timedelta(days=val)
-    return timedelta(hours=24)
+    try:
+        delta = {
+            "m": timedelta(minutes=val),
+            "h": timedelta(hours=val),
+            "d": timedelta(days=val),
+        }[unit]
+    except (OverflowError, ValueError) as exc:
+        raise ValueError(f"Horizon '{horizon_str}' is too large to represent.") from exc
+    if delta < MIN_HORIZON or delta > MAX_HORIZON:
+        raise ValueError(
+            f"Horizon '{horizon_str}' is outside the supported range "
+            f"(1 minute to 365 days)."
+        )
+    return delta
 
 
 class ForecastCreateRequest(BaseModel):
@@ -58,6 +79,35 @@ class ForecastCreateRequest(BaseModel):
         description="Target metric identifier, e.g. service:checkout:capacity_exceedance_24h",
     )
     horizon: str = Field(default="24h", description="Forecast horizon, e.g. '24h', '6h', '30m'")
+
+    @field_validator("horizon")
+    @classmethod
+    def _validate_horizon(cls, value: str) -> str:
+        parse_horizon(value)
+        return value
+
+    @field_validator("as_of")
+    @classmethod
+    def _validate_as_of(cls, value: datetime | None) -> datetime | None:
+        """Refuse timestamps the engine cannot honestly forecast from.
+
+        A far-future ``as_of`` used to reach pandas arithmetic and surface as
+        ``'datetime.datetime' object has no attribute 'floor'``; a far-past one
+        asks the engine to predict from stale data. Both are caller errors and
+        both answer 422 with the acceptable window.
+        """
+        if value is None:
+            return None
+        moment = value if value.tzinfo else value.replace(tzinfo=UTC)
+        now = datetime.now(UTC)
+        if moment > now + timedelta(minutes=5):
+            raise ValueError(
+                "as_of is in the future; forecasts must be anchored to a time that "
+                "has already happened (at most 5 minutes of clock skew is tolerated)."
+            )
+        if moment < now - timedelta(days=365):
+            raise ValueError("as_of is more than a year old; the engine has no data for it.")
+        return value
     context: dict[str, Any] = Field(default_factory=dict)
     constraints: dict[str, Any] = Field(default_factory=dict)
     required_confidence: ConfidenceLevel | None = Field(
@@ -93,6 +143,24 @@ class ForecastResponse(BaseModel):
     review_at: datetime
     status: ForecastStatus
     created_at: datetime | None = None
+    evidence_class: EvidenceClass = EvidenceClass.SYNTHETIC
+    evidence_source: str | None = None
+    prediction_is_not_authorization: bool = Field(
+        default=True,
+        description="Architectural invariant: a forecast never grants execution authority.",
+    )
+    executable_commands: list[str] = Field(
+        default_factory=list,
+        description="Always empty by construction; Futuris never emits runnable commands.",
+    )
+    model_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Model family, validation score and selection provenance. "
+            "selection_degraded=true means the candidate search was bounded by "
+            "CPU pressure or a request budget, and says which candidates were skipped."
+        ),
+    )
 
 
 class ForecastAbstainedResponse(BaseModel):
@@ -183,6 +251,18 @@ async def create_forecast(
     f.status = ForecastStatus.ACTIVE
     saved = await forecast_repo.create(f)
 
+    await AuditLogger(forecast_repo.session).log_mutation(
+        actor_label=user.label,
+        action="create_forecast",
+        entity="forecast",
+        entity_id=str(saved.forecast_id),
+        payload={
+            "target": saved.target,
+            "prediction": saved.prediction,
+            "evidence_class": saved.evidence_class.value,
+        },
+    )
+
     return ForecastResponse(
         forecast_id=saved.forecast_id,
         target=saved.target,
@@ -202,13 +282,18 @@ async def create_forecast(
         review_at=saved.review_at,
         status=saved.status,
         created_at=saved.as_of,
+        evidence_class=saved.evidence_class,
+        evidence_source=saved.evidence_source,
+        model_metadata=saved.model_metadata,
+        prediction_is_not_authorization=saved.prediction_is_not_authorization,
+        executable_commands=saved.executable_commands,
     )
 
 
 @router.get("", response_model=list[ForecastResponse], summary="List and Filter Forecasts")
 async def list_forecasts(
     response: Response,
-    user: RequireViewer,
+    user: AllowAnonymousRead,
     target: str | None = Query(None),
     status: ForecastStatus | None = Query(None),
     as_of_after: datetime | None = Query(None),
@@ -218,6 +303,7 @@ async def list_forecasts(
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
 ) -> list[ForecastResponse]:
     """List forecasts with pagination and total count headers."""
+    _ = user
     items = await forecast_repo.list_by_status(status) if status else []
     if not status:
         if target:
@@ -254,6 +340,11 @@ async def list_forecasts(
             review_at=i.review_at,
             status=i.status,
             created_at=i.as_of,
+            evidence_class=i.evidence_class,
+            evidence_source=i.evidence_source,
+            model_metadata=i.model_metadata,
+            prediction_is_not_authorization=i.prediction_is_not_authorization,
+            executable_commands=i.executable_commands,
         )
         for i in sliced
     ]
@@ -262,10 +353,11 @@ async def list_forecasts(
 @router.get("/{forecast_id}", response_model=ForecastResponse, summary="Get Full Forecast Details")
 async def get_forecast(
     forecast_id: UUID,
-    user: RequireViewer,
+    user: AllowAnonymousRead,
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
 ) -> ForecastResponse:
     """Retrieve full forecast aggregate root."""
+    _ = user
     f = await forecast_repo.get(forecast_id)
     if not f:
         raise HTTPException(status_code=404, detail="Forecast not found")
@@ -287,6 +379,11 @@ async def get_forecast(
         review_at=f.review_at,
         status=f.status,
         created_at=f.as_of,
+        evidence_class=f.evidence_class,
+        evidence_source=f.evidence_source,
+        model_metadata=f.model_metadata,
+        prediction_is_not_authorization=f.prediction_is_not_authorization,
+        executable_commands=f.executable_commands,
     )
 
 
@@ -315,6 +412,14 @@ async def invalidate_forecast(
     )
     await event_repo.append(event)
 
+    await AuditLogger(forecast_repo.session).log_mutation(
+        actor_label=user.label,
+        action="invalidate_forecast",
+        entity="forecast",
+        entity_id=str(forecast_id),
+        payload={"reason": req.reason, "previous_status": f.status.value},
+    )
+
     return ForecastResponse(
         forecast_id=updated.forecast_id,
         target=updated.target,
@@ -334,16 +439,22 @@ async def invalidate_forecast(
         review_at=updated.review_at,
         status=updated.status,
         created_at=updated.as_of,
+        evidence_class=updated.evidence_class,
+        evidence_source=updated.evidence_source,
+        model_metadata=updated.model_metadata,
+        prediction_is_not_authorization=updated.prediction_is_not_authorization,
+        executable_commands=updated.executable_commands,
     )
 
 
 @router.get("/{forecast_id}/outcome", response_model=Outcome, summary="Get Resolved Outcome")
 async def get_forecast_outcome(
     forecast_id: UUID,
-    user: RequireViewer,
+    user: AllowAnonymousRead,
     outcome_repo: OutcomeRepository = Depends(get_outcome_repo),
 ) -> Outcome:
     """Retrieve ground-truth outcome resolution for forecast."""
+    _ = user
     outcome = await outcome_repo.get_by_forecast(forecast_id)
     if not outcome:
         raise HTTPException(status_code=404, detail="Outcome not resolved yet for this forecast")
@@ -373,6 +484,16 @@ async def resolve_manual(
     if not f:
         raise HTTPException(status_code=404, detail="Forecast not found")
 
+    existing = await outcome_repo.get_by_forecast(forecast_id)
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Forecast {forecast_id} already has an outcome recorded at "
+                f"{existing.resolved_at.isoformat()}; outcomes are immutable."
+            ),
+        )
+
     outcome = Outcome(
         outcome_id=uuid4(),
         forecast_id=forecast_id,
@@ -394,4 +515,17 @@ async def resolve_manual(
         emitted_at=datetime.now(UTC),
     )
     await event_repo.append(event)
+
+    await AuditLogger(forecast_repo.session).log_mutation(
+        actor_label=user.label,
+        action="resolve_forecast_manual",
+        entity="outcome",
+        entity_id=str(saved.outcome_id),
+        payload={
+            "forecast_id": str(forecast_id),
+            "observed_value": saved.observed_value,
+            "event_occurred": saved.event_occurred,
+            "note": req.note,
+        },
+    )
     return saved
