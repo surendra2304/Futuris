@@ -1,11 +1,11 @@
 """ForecastEngine: Pipeline orchestration with calibration confidence and drivers."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
-import numpy as np
-
-from futuris.connectors.base import BaseConnector
+from futuris.connectors.base import BaseConnector, Observation
+from futuris.connectors.intelx_context import IntelXContextInjector
 from futuris.connectors.synthetic_telemetry import SyntheticTelemetryConnector
 from futuris.core.enums import ForecastStatus, SignalClass
 from futuris.core.schemas import Driver, Forecast
@@ -14,13 +14,14 @@ from futuris.evidence.snapshots import EvidenceSnapshotter
 from futuris.features.contextualize import ContextLayer
 from futuris.features.drivers import DriverAnalyzer
 from futuris.features.normalize import Normalizer
+from futuris.infra.config import settings
+from futuris.infra.cpu import cpu_saturated, run_cpu
 from futuris.infra.logging import get_logger
+from futuris.models.ai_universe_enhanced import AIUniverseModelEnhancer
 from futuris.models.base import ModelPrediction
 from futuris.models.registry import model_registry
-from futuris.connectors.intelx_context import IntelXContextInjector
-from futuris.infra.config import settings
-from futuris.models.ai_universe_enhanced import AIUniverseModelEnhancer
 from futuris.models.routing import ModelRouter, SeriesMetadata
+from futuris.models.selection import select_best_adapter
 
 logger = get_logger("futuris.core.engine")
 
@@ -62,8 +63,15 @@ class ForecastEngine:
         history_lookback_days: int = 14,
         evidence_scope: str = "telemetry:synthetic",
         historical_resolved_count: int = 0,
+        model_budget_seconds: float | None = None,
     ) -> list[Forecast]:
-        """Produce a draft Forecast object for the target with zero future-data leakage."""
+        """Produce a draft Forecast object for the target with zero future-data leakage.
+
+        I/O (telemetry fetch, IntelX research) stays on the event loop. The
+        CPU-bound core -- normalization, feature building, candidate backtest,
+        refit, driver analysis and assembly -- runs on the shared CPU gate, so
+        one forecast no longer freezes every other request.
+        """
         as_of = as_of.replace(tzinfo=UTC) if as_of.tzinfo is None else as_of.astimezone(UTC)
 
         start_time = as_of - timedelta(days=history_lookback_days)
@@ -71,6 +79,53 @@ class ForecastEngine:
         # 1. Ingest raw observations
         raw_observations = await self.connector.fetch(start_time, as_of)
 
+        # 1.1 Ingest qualitative exogenous research from IntelX
+        intelx_reports: list[Any] = []
+        exogenous_adj: dict[str, float] = {
+            "sentiment_multiplier": 1.0,
+            "volatility_multiplier": 1.0,
+            "confidence_penalty": 0.0,
+        }
+        try:
+            intelx_reports = await self.intelx_injector.fetch_recent_research(target, as_of=as_of)
+            exogenous_adj = self.intelx_injector.compute_exogenous_adjustments(intelx_reports)
+        except Exception as exc:
+            logger.warning("intelx_context_injection_skipped", target=target, error=str(exc))
+
+        degraded = cpu_saturated()
+        return await run_cpu(
+            "orchestrate",
+            self._orchestrate_sync,
+            _exclusive=not degraded,
+            target=target,
+            as_of=as_of,
+            horizon=horizon,
+            capacity_threshold=capacity_threshold,
+            raw_observations=raw_observations,
+            intelx_reports=intelx_reports,
+            exogenous_adj=exogenous_adj,
+            evidence_scope=evidence_scope,
+            historical_resolved_count=historical_resolved_count,
+            model_budget_seconds=model_budget_seconds,
+            cpu_saturated=degraded,
+        )
+
+    def _orchestrate_sync(
+        self,
+        *,
+        target: str,
+        as_of: datetime,
+        horizon: timedelta,
+        capacity_threshold: float,
+        raw_observations: list[Observation],
+        intelx_reports: list[Any],
+        exogenous_adj: dict[str, float],
+        evidence_scope: str,
+        historical_resolved_count: int,
+        model_budget_seconds: float | None = None,
+        cpu_saturated: bool = False,
+    ) -> list[Forecast]:
+        """CPU-bound core of :meth:`orchestrate`; runs in a worker thread."""
         # 2. Normalize and align grid
         signal_set = self.normalizer.normalize(raw_observations)
 
@@ -86,19 +141,6 @@ class ForecastEngine:
             source_id=evidence_scope,
             signal_class=SignalClass.TELEMETRY,
         )
-
-        # 4.1 Ingest qualitative exogenous research from IntelX
-        intelx_reports = []
-        exogenous_adj = {
-            "sentiment_multiplier": 1.0,
-            "volatility_multiplier": 1.0,
-            "confidence_penalty": 0.0,
-        }
-        try:
-            intelx_reports = await self.intelx_injector.fetch_recent_research(target, as_of=as_of)
-            exogenous_adj = self.intelx_injector.compute_exogenous_adjustments(intelx_reports)
-        except Exception as exc:
-            logger.warning("intelx_context_injection_skipped", target=target, error=str(exc))
 
         # 5. Route candidate models
         step_minutes = signal_set.grid_step_minutes
@@ -121,36 +163,20 @@ class ForecastEngine:
         x_train = x_df.iloc[:-val_steps]
         y_val = y_series.iloc[-val_steps:].to_numpy()
 
-        best_adapter = None
-        best_score = float("inf")
-        candidate_scores: dict[str, float] = {}
-        failed_candidates: dict[str, str] = {}
-
-        for candidate_name in candidates:
-            adapter = model_registry.get_adapter(candidate_name)
-            try:
-                split_time = as_of - timedelta(minutes=val_steps * step_minutes)
-                adapter.fit(x_train, y_train, as_of=split_time)
-                val_pred = adapter.predict(val_steps)
-                mae = float(np.mean(np.abs(np.array(val_pred.point_forecast) - y_val)))
-                candidate_scores[candidate_name] = mae
-                if mae < best_score:
-                    best_score = mae
-                    best_adapter = adapter
-            except Exception as exc:
-                failed_candidates[candidate_name] = str(exc)
-                logger.warning("candidate_model_fit_failed", candidate=candidate_name, error=str(exc))
-                continue
-
-        is_fallback = False
-        if best_adapter is None:
-            is_fallback = True
-            best_adapter = model_registry.get_adapter("naive")
-            logger.warning(
-                "all_candidate_models_failed_using_fallback",
-                candidates=candidates,
-                failures=failed_candidates,
-            )
+        selection = select_best_adapter(
+            candidates,
+            x_train=x_train,
+            y_train=y_train,
+            y_val=y_val,
+            as_of=as_of,
+            val_steps=val_steps,
+            step_minutes=step_minutes,
+            budget_seconds=model_budget_seconds,
+            cpu_saturated=cpu_saturated,
+        )
+        best_adapter = selection.adapter
+        best_score = selection.score
+        is_fallback = selection.is_fallback
 
         # 7. Refit best adapter on complete historical dataset
         best_adapter.fit(x_df, y_series, as_of=as_of)
@@ -208,7 +234,9 @@ class ForecastEngine:
                 Driver(
                     name=f"intelx:{top_finding[:28]}",
                     direction="positive" if sentiment_positive else "negative",
-                    strength=min(0.95, round(exogenous_adj.get("volatility_multiplier", 1.0) * 0.70, 2)),
+                    strength=min(
+                        0.95, round(exogenous_adj.get("volatility_multiplier", 1.0) * 0.70, 2)
+                    ),
                     leading_or_lagging="leading",
                     evidence_refs=[evidence_ref.evidence_id],
                 )
@@ -244,6 +272,12 @@ class ForecastEngine:
             review_at=review_at,
             status=ForecastStatus.DRAFT,
             scenario_id=None,
+            model_metadata={
+                "model_version": model_version_str,
+                "family": model_version_str.split(":")[0],
+                "prediction_is_not_authorization": True,
+                **selection.metadata(),
+            },
         )
 
         return [forecast]

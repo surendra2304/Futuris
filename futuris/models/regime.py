@@ -66,11 +66,7 @@ class MarketRegimeForecaster:
             v_std = np.std(v_arr) + 1e-8
             vol_z = float((v_arr[-1] - v_mean) / v_std)
         else:
-            vol_z = (
-                float(np.std(returns[-10:]) / std_ret)
-                if len(returns) >= 10
-                else 0.5
-            )
+            vol_z = float(np.std(returns[-10:]) / std_ret) if len(returns) >= 10 else 0.5
 
         # 3. Regime classification
         if vol_z > self.volatility_threshold_z:

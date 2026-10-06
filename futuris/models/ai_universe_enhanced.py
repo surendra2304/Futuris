@@ -41,17 +41,13 @@ class AIUniverseModelEnhancer:
         adj_lower = base_prediction - scaled_half_width
         adj_upper = base_prediction + scaled_half_width
 
-        expansion_pct = max(
-            0.0, ((scaled_half_width - half_width) / (half_width + 1e-8)) * 100.0
-        )
+        expansion_pct = max(0.0, ((scaled_half_width - half_width) / (half_width + 1e-8)) * 100.0)
 
         risk_list = []
         if vol_factor > 1.2:
             risk_list.append("Elevated market volatility indicated by external research")
         if sentiment < 0.95:
-            risk_list.append(
-                "Adverse sector regulatory developments observed in IntelX reports"
-            )
+            risk_list.append("Adverse sector regulatory developments observed in IntelX reports")
         if not risk_list:
             risk_list.append("Nominal operational baseline; low exogenous variance")
 
@@ -83,15 +79,13 @@ class ForecastExplanationGenerator:
         if forecast.drivers:
             top_d = forecast.drivers[0]
             dir_str = (
-                top_d.direction.value
-                if hasattr(top_d.direction, "value")
-                else str(top_d.direction)
+                top_d.direction.value if hasattr(top_d.direction, "value") else str(top_d.direction)
             )
             primary_driver = f"{top_d.name} ({dir_str})"
             corr_val = top_d.strength
 
         prob_str = (
-            f", exceedance probability {(forecast.probability or 0.0)*100:.1f}%"
+            f", exceedance probability {(forecast.probability or 0.0) * 100:.1f}%"
             if forecast.probability
             else ""
         )

@@ -72,8 +72,11 @@ class IntelXContextInjector:
             async with httpx.AsyncClient(
                 transport=self.transport, timeout=self.timeout_seconds
             ) as client:
-                # 1. First attempt dedicated Futuris context endpoint on IntelX with appropriate domain
-                is_market = any(k in asset_or_sector.lower() for k in ["btc", "eth", "sol", "crypto", "trading", "market", "usdt"])
+                # 1. First attempt the dedicated Futuris context endpoint
+                is_market = any(
+                    k in asset_or_sector.lower()
+                    for k in ["btc", "eth", "sol", "crypto", "trading", "market", "usdt"]
+                )
                 domain = "market" if is_market else "general"
                 context_url = f"{self.base_url}/api/v1/futuris/context"
                 payload = {
@@ -156,9 +159,13 @@ class IntelXContextInjector:
                         )
                         if pub_dt < start_time or pub_dt > ref_time:
                             continue
-                        stable_id = UUID(report_id) if report_id else uuid5(
-                            NAMESPACE_URL,
-                            f"intelx:{target}:{pub_dt.isoformat()}:{summary.strip()}",
+                        stable_id = (
+                            UUID(report_id)
+                            if report_id
+                            else uuid5(
+                                NAMESPACE_URL,
+                                f"intelx:{target}:{pub_dt.isoformat()}:{summary.strip()}",
+                            )
                         )
                         reports.append(
                             IntelXResearchReport(
@@ -189,13 +196,17 @@ class IntelXContextInjector:
                     vol_factor = 1.0
                     for s in signals:
                         dir_str = s.get("direction", "neutral")
-                        mag = float(s.get("magnitude", 0.0) or 0.0)
+                        magnitude = float(s.get("magnitude", 0.0) or 0.0)
                         if dir_str == "positive":
                             sentiment += 0.25
                         elif dir_str == "negative":
                             sentiment -= 0.25
                         elif dir_str == "volatile":
                             vol_factor = max(vol_factor, 1.35)
+                        # A large declared magnitude widens the volatility
+                        # adjustment rather than being silently discarded.
+                        if abs(magnitude) >= 0.5:
+                            vol_factor = max(vol_factor, 1.1)
 
                     sentiment = max(-1.0, min(1.0, sentiment))
                     reports.append(
@@ -203,7 +214,8 @@ class IntelXContextInjector:
                             report_id=uuid4(),
                             asset_or_sector=asset_or_sector,
                             published_at=ref_time - timedelta(days=1),
-                            summary=f"IntelX context for {asset_or_sector}: {len(findings)} findings, {len(signals)} signals.",
+                            summary="IntelX context for {asset_or_sector}: {len(findings)} "
+                                "findings, {len(signals)} signals.",
                             sentiment_score=sentiment,
                             volatility_impact_factor=vol_factor,
                             key_findings=findings_texts,
@@ -322,8 +334,16 @@ class IntelXContextInjector:
             if value in requested_aliases or value.endswith(f":{requested}"):
                 return True
         relevance = payload.get("relevance")
-        domain = relevance.get("domain", "") if isinstance(relevance, dict) else payload.get("domain", "")
-        category = relevance.get("category", "") if isinstance(relevance, dict) else payload.get("category", "")
+        domain = (
+            relevance.get("domain", "")
+            if isinstance(relevance, dict)
+            else payload.get("domain", "")
+        )
+        category = (
+            relevance.get("category", "")
+            if isinstance(relevance, dict)
+            else payload.get("category", "")
+        )
         market_labels = {str(domain).lower(), str(category).lower()}
         return bool(market_labels & {"market", "crypto", "cryptocurrency", "digital_assets"})
 

@@ -68,9 +68,7 @@ class SyntheticTelemetryConnector(BaseConnector):
                 break
 
             day_fraction = (
-                current_time.hour * 3600
-                + current_time.minute * 60
-                + current_time.second
+                current_time.hour * 3600 + current_time.minute * 60 + current_time.second
             ) / 86400.0
             day_of_week = current_time.weekday()
             days_from_start = (current_time - base_time).total_seconds() / 86400.0

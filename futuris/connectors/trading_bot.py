@@ -34,7 +34,9 @@ class TradingBotConnector(BaseConnector):
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "X-API-Key": self.api_key if self.api_key != "trading_bot_default_key" else "read_key_default_secret_123",
+            "X-API-Key": self.api_key
+            if self.api_key != "trading_bot_default_key"
+            else "read_key_default_secret_123",
             "Accept": "application/json",
         }
         params = {
@@ -74,12 +76,14 @@ class TradingBotConnector(BaseConnector):
                             ):
                                 value = status_json.get(key)
                                 if isinstance(value, (int, float)) and not isinstance(value, bool):
-                                    data.append({
-                                        "timestamp": observed_at,
-                                        "metric_type": metric_type,
-                                        "value": value,
-                                        "source": "stratex:status_snapshot",
-                                    })
+                                    data.append(
+                                        {
+                                            "timestamp": observed_at,
+                                            "metric_type": metric_type,
+                                            "value": value,
+                                            "source": "stratex:status_snapshot",
+                                        }
+                                    )
         except Exception as exc:
             logger.warning("trading_telemetry_unavailable_no_fallback", error=type(exc).__name__)
 

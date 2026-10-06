@@ -11,26 +11,31 @@ from futuris.connectors.base import Observation
 
 class TimezoneNormalizationError(ValueError):
     """Raised when an invalid, ambiguous, or unparseable timezone is encountered."""
+
     pass
 
 
 class UnitMismatchError(ValueError):
     """Raised when incoming telemetry observations have mismatched measurement units."""
+
     pass
 
 
 class HorizonMismatchError(ValueError):
     """Raised when a requested horizon mismatches the temporal span or resolution."""
+
     pass
 
 
 class DataStalenessError(RuntimeError):
     """Raised when telemetry data is stale and exceeds the maximum acceptable latency."""
+
     pass
 
 
 class InsufficientDataError(RuntimeError):
     """Raised when observation data is too sparse, truncated, or low-coverage for forecasting."""
+
     pass
 
 
@@ -43,12 +48,16 @@ def normalize_timestamp(dt: Any) -> datetime:
             parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
             return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
         except Exception as err:
-            raise TimezoneNormalizationError(f"Cannot normalize timestamp string '{dt}' to UTC: {err}") from err
+            raise TimezoneNormalizationError(
+                f"Cannot normalize timestamp string '{dt}' to UTC: {err}"
+            ) from err
     if isinstance(dt, (int, float)):
         try:
             return datetime.fromtimestamp(dt, tz=UTC)
         except Exception as err:
-            raise TimezoneNormalizationError(f"Cannot normalize epoch timestamp '{dt}' to UTC: {err}") from err
+            raise TimezoneNormalizationError(
+                f"Cannot normalize epoch timestamp '{dt}' to UTC: {err}"
+            ) from err
     raise TimezoneNormalizationError(f"Unsupported timestamp type: {type(dt)}")
 
 
@@ -59,7 +68,12 @@ def _extract_timestamp(item: Any) -> datetime:
     if hasattr(item, "timestamp"):
         return normalize_timestamp(item.timestamp)
     if isinstance(item, dict):
-        raw = item.get("observed_at") or item.get("timestamp") or item.get("time") or item.get("as_of")
+        raw = (
+            item.get("observed_at")
+            or item.get("timestamp")
+            or item.get("time")
+            or item.get("as_of")
+        )
         if raw is not None:
             return normalize_timestamp(raw)
     return normalize_timestamp(item)
@@ -118,7 +132,39 @@ def check_insufficient_data(
         return True, msg
 
     if count < min_points:
-        msg = f"Insufficient data: observation count ({count}) is below minimum required ({min_points})."
+        msg = (
+            f"Insufficient data: observation count ({count}) is below minimum required "
+            f"({min_points})."
+        )
+        if raise_error:
+            raise InsufficientDataError(msg)
+        return True, msg
+
+    # Coverage check: an observation set can carry enough points and still be
+    # too sparse to forecast from. Coverage is taken from an attached
+    # DataQualityReport when one exists; otherwise it is measured as the share
+    # of observed timestamps over the span they cover.
+    coverage = None
+    quality_report = getattr(observations, "quality_report", None)
+    if quality_report is not None and hasattr(quality_report, "coverage_percentage"):
+        coverage = float(quality_report.coverage_percentage)
+    elif hasattr(observations, "__getitem__") and count >= 2:
+        try:
+            stamps = sorted(
+                obs.observed_at for obs in observations if getattr(obs, "observed_at", None)
+            )
+        except TypeError:
+            stamps = []
+        if len(stamps) >= 2:
+            span = (stamps[-1] - stamps[0]).total_seconds()
+            expected = max(1, int(span // 60) + 1)
+            coverage = round(min(100.0, (len(stamps) / expected) * 100.0), 2)
+
+    if coverage is not None and coverage < min_coverage_percentage:
+        msg = (
+            f"Insufficient data: signal coverage ({coverage}%) is below the required "
+            f"{min_coverage_percentage}%."
+        )
         if raise_error:
             raise InsufficientDataError(msg)
         return True, msg
@@ -137,7 +183,8 @@ def validate_horizon(
     end_utc = normalize_timestamp(end_time)
     if end_utc <= start_utc:
         raise HorizonMismatchError(
-            f"Horizon end time ({end_utc.isoformat()}) must be strictly after start time ({start_utc.isoformat()})."
+            "Horizon end time ({end_utc.isoformat()}) must be strictly after start time "
+                "({start_utc.isoformat()})."
         )
     delta = end_utc - start_utc
     if delta < min_horizon:
@@ -163,7 +210,7 @@ def check_missing_telemetry(
         gap = normalized[i] - normalized[i - 1]
         if gap > max_allowed_gap:
             raise InsufficientDataError(
-                f"Missing telemetry gap of {gap} detected between {normalized[i-1].isoformat()} "
+                f"Missing telemetry gap of {gap} detected between {normalized[i - 1].isoformat()} "
                 f"and {normalized[i].isoformat()} (max allowed gap: {max_allowed_gap})."
             )
     return False
@@ -246,16 +293,22 @@ class Normalizer:
 
             dt = normalize_timestamp(obs.observed_at)
 
-            valid_records.append({
-                "timestamp": dt,
-                "value": float(obs.value),
-            })
+            valid_records.append(
+                {
+                    "timestamp": dt,
+                    "value": float(obs.value),
+                }
+            )
 
         if not valid_records:
             msg = f"No valid records matching series_id '{series_id}'"
             raise ValueError(msg)
 
         df = pd.DataFrame(valid_records)
+        # Force a real datetime column: with object dtype ``.min()`` returns a
+        # plain datetime, which has no ``.floor``/``.ceil`` (reachable whenever a
+        # caller supplies an unusual as_of window).
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
 
         # 2. Clean: Drop nulls, clip impossible values
         df.dropna(subset=["timestamp", "value"], inplace=True)
@@ -298,9 +351,7 @@ class Normalizer:
         # Count long gaps
         long_gaps_count = post_fill_nulls
         cleaned_points = len(filled)
-        coverage_pct = round(
-            (1.0 - (long_gaps_count / max(1, total_expected_points))) * 100.0, 2
-        )
+        coverage_pct = round((1.0 - (long_gaps_count / max(1, total_expected_points))) * 100.0, 2)
 
         quality_report = DataQualityReport(
             total_raw_points=total_raw,

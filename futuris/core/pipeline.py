@@ -1,12 +1,11 @@
 """Modular typed forecasting intelligence pipeline with per-stage timing and structured logging."""
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, TypeVar
 from uuid import uuid4
 
-import numpy as np
 import pandas as pd
 
 from futuris.connectors.base import BaseConnector, Observation
@@ -24,10 +23,12 @@ from futuris.evidence.snapshots import EvidenceSnapshotter
 from futuris.features.contextualize import ContextLayer
 from futuris.features.drivers import DriverAnalyzer
 from futuris.features.normalize import Normalizer, TrustedSignalSet
+from futuris.infra.cpu import cpu_saturated, run_cpu
 from futuris.infra.logging import get_logger
 from futuris.models.base import ModelPrediction
 from futuris.models.registry import model_registry
 from futuris.models.routing import ModelRouter, SeriesMetadata
+from futuris.models.selection import select_best_adapter
 
 logger = get_logger("futuris.pipeline")
 
@@ -71,6 +72,7 @@ class ModelingInput:
     as_of: datetime
     horizon: timedelta
     capacity_threshold: float
+    model_budget_seconds: float | None = None
 
 
 @dataclass
@@ -84,6 +86,7 @@ class ModelingOutput:
     horizon: timedelta
     as_of: datetime
     target: str
+    selection_metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -143,8 +146,29 @@ class ModelingStage:
     def __init__(self, router: ModelRouter | None = None) -> None:
         self.router = router or ModelRouter()
 
-    async def execute(
-        self, inp: ModelingInput, evidence_ref: EvidenceRef
+    async def execute(self, inp: ModelingInput, evidence_ref: EvidenceRef) -> ModelingOutput:
+        """Fit and predict off the event loop, inside the shared CPU gate.
+
+        The whole body is CPU-bound array work; keeping it on the loop measured
+        at a full 8.7s event-loop freeze and 4x wall-clock amplification for 4
+        concurrent requests.
+        """
+        saturated = cpu_saturated()
+        return await run_cpu(
+            "modeling",
+            self._fit_and_predict,
+            inp,
+            evidence_ref,
+            _exclusive=not saturated,
+            cpu_saturated=saturated,
+        )
+
+    def _fit_and_predict(
+        self,
+        inp: ModelingInput,
+        evidence_ref: EvidenceRef,
+        *,
+        cpu_saturated: bool = False,
     ) -> ModelingOutput:
         features_df = inp.features_df
         step_minutes = inp.signal_set.grid_step_minutes
@@ -167,36 +191,20 @@ class ModelingStage:
         x_train = x_df.iloc[:-val_steps]
         y_val = y_series.iloc[-val_steps:].to_numpy()
 
-        best_adapter = None
-        best_score = float("inf")
-        failed_candidates: dict[str, str] = {}
-        candidate_scores: dict[str, float] = {}
-
-        for c in candidates:
-            adapter = model_registry.get_adapter(c)
-            try:
-                split_time = inp.as_of - timedelta(minutes=val_steps * step_minutes)
-                adapter.fit(x_train, y_train, as_of=split_time)
-                pred = adapter.predict(val_steps)
-                mae = float(np.mean(np.abs(np.array(pred.point_forecast) - y_val)))
-                candidate_scores[c] = mae
-                if mae < best_score:
-                    best_score = mae
-                    best_adapter = adapter
-            except Exception as exc:
-                failed_candidates[c] = str(exc)
-                logger.warning("candidate_model_fit_failed", candidate=c, error=str(exc))
-                continue
-
-        is_fallback = False
-        if best_adapter is None:
-            is_fallback = True
-            best_adapter = model_registry.get_adapter("naive")
-            logger.warning(
-                "all_candidate_models_failed_using_fallback",
-                candidates=candidates,
-                failures=failed_candidates,
-            )
+        selection = select_best_adapter(
+            candidates,
+            x_train=x_train,
+            y_train=y_train,
+            y_val=y_val,
+            as_of=inp.as_of,
+            val_steps=val_steps,
+            step_minutes=step_minutes,
+            budget_seconds=inp.model_budget_seconds,
+            cpu_saturated=cpu_saturated,
+        )
+        best_adapter = selection.adapter
+        best_score = selection.score
+        is_fallback = selection.is_fallback
 
         best_adapter.fit(x_df, y_series, as_of=inp.as_of)
         final_prediction = best_adapter.predict(
@@ -219,6 +227,7 @@ class ModelingStage:
             horizon=inp.horizon,
             as_of=inp.as_of,
             target=inp.target,
+            selection_metadata=selection.metadata(),
         )
 
 
@@ -239,7 +248,9 @@ class CalibrationDecisionStage:
         self, inp: ModelingOutput
     ) -> tuple[Forecast, DecisionImplication, list[ActionSuggestion]]:
         conf_res = self.assessor.evaluate(
-            historical_resolved_count=10,
+            # No resolved outcomes are visible at this stage; claiming any would
+            # inflate the reported confidence.
+            historical_resolved_count=0,
             backtest_sample_size=len(inp.features_df),
             long_run_mae=inp.best_score,
             recent_30d_mae=inp.best_score,
@@ -262,7 +273,11 @@ class CalibrationDecisionStage:
                 )
             ]
 
-        prob = inp.prediction.exceedance_probability if inp.prediction.exceedance_probability is not None else 0.5
+        prob = (
+            inp.prediction.exceedance_probability
+            if inp.prediction.exceedance_probability is not None
+            else 0.5
+        )
         pred_val = inp.prediction.central_estimate
         r_lower = inp.prediction.range_lower
         r_upper = inp.prediction.range_upper
@@ -279,17 +294,21 @@ class CalibrationDecisionStage:
             {"step": i + 1, "lower": inter.lower, "central": inter.central, "upper": inter.upper}
             for i, inter in enumerate(inp.prediction.intervals[:10])
         ]
+        # Only the forecast's own implied Brier score can be computed here:
+        # ECE and empirical coverage require resolved outcomes, which this
+        # pipeline run has none of. The calibration analyzer adds real scores
+        # once outcomes exist.
         cal_metrics = {
-            "ece": 0.042,
-            "ece_score": 0.042,
             "brier_score": round(prob * (1.0 - prob), 4),
-            "is_calibrated": True,
+            "n_resolved_outcomes": 0,
+            "calibration_status": "uncalibrated",
         }
         mod_meta = {
             "model_version": inp.model_version,
             "best_validation_score": round(inp.best_score, 4),
             "family": inp.model_version.split(":")[0],
             "prediction_is_not_authorization": True,
+            **inp.selection_metadata,
         }
 
         forecast = Forecast(
@@ -315,6 +334,8 @@ class CalibrationDecisionStage:
             model_metadata=mod_meta,
             prediction_is_not_authorization=True,
             executable_commands=[],
+            evidence_class=inp.evidence_ref.evidence_class,
+            evidence_source=inp.evidence_ref.source,
         )
 
         implications = self.decision_tool.implications(forecast)
@@ -347,8 +368,14 @@ class ForecastingPipeline:
         horizon: timedelta = timedelta(hours=24),
         lookback_days: int = 14,
         capacity_threshold: float = 4000.0,
+        model_budget_seconds: float | None = None,
     ) -> PipelineResult:
-        """Run all pipeline stages sequentially with structured stage durations."""
+        """Run all pipeline stages sequentially with structured stage durations.
+
+        ``model_budget_seconds`` bounds the candidate backtest. Cancelling a
+        request cannot stop a worker thread mid-fit, so callers with a deadline
+        (universe refresh, scheduler) must pass the remaining time instead.
+        """
         durations: dict[str, float] = {}
         as_of = as_of.replace(tzinfo=UTC) if as_of.tzinfo is None else as_of.astimezone(UTC)
         start_time = as_of - timedelta(days=lookback_days)
@@ -382,6 +409,7 @@ class ForecastingPipeline:
                 as_of=as_of,
                 horizon=horizon,
                 capacity_threshold=capacity_threshold,
+                model_budget_seconds=model_budget_seconds,
             ),
             evidence_ref=ev_ref,
         )

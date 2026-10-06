@@ -81,7 +81,9 @@ class CalibrationAnalyzer:
         actual_outcomes: list[bool] | list[int],
     ) -> list[tuple[float, float, int]]:
         curve = self.compute_reliability_curve(predicted_probs, [bool(a) for a in actual_outcomes])
-        return list(zip(curve.bin_centers, curve.observed_frequencies, curve.bin_counts, strict=False))
+        return list(
+            zip(curve.bin_centers, curve.observed_frequencies, curve.bin_counts, strict=False)
+        )
 
     def compute_brier_score(
         self,
@@ -110,11 +112,13 @@ class CalibrationAnalyzer:
         """Compute full suite of calibration metrics from paired predictions and outcomes."""
         bool_outcomes = [bool(a) for a in actual_outcomes]
         if not predicted_probs or not actual_outcomes:
+            # No paired samples: there is nothing measured to report. Returning
+            # zeros with is_calibrated=True would claim a calibration result
+            # that was never computed.
             return {
-                "ece_score": 0.0,
-                "brier_score": 0.0,
-                "is_calibrated": True,
-                "sample_count": 0,
+                "n_resolved_outcomes": 0,
+                "calibration_status": "uncalibrated",
+                "detail": "no paired predictions and outcomes were supplied",
             }
         ece = self.compute_expected_calibration_error(predicted_probs, bool_outcomes)
         brier = self.compute_brier_score(predicted_probs, bool_outcomes)
@@ -124,6 +128,8 @@ class CalibrationAnalyzer:
             "ece_score": round(ece, 4),
             "brier_score": round(brier, 4),
             "is_calibrated": ece < 0.15,
+            "n_resolved_outcomes": len(predicted_probs),
+            "calibration_status": "measured",
             "sample_count": len(predicted_probs),
             "reliability_curve": {
                 "bin_centers": curve.bin_centers,
@@ -182,4 +188,3 @@ def update_calibration_metrics(
     """Module-level helper to compute and update calibration metrics."""
     analyzer = CalibrationAnalyzer(num_bins=num_bins)
     return analyzer.update_calibration_metrics(predicted_probs, actual_outcomes)
-

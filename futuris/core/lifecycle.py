@@ -81,6 +81,7 @@ class LifecycleManager:
     ) -> Outcome:
         """Resolve a forecast outcome manually with human observation."""
         from futuris.core.enums import ResolutionMethod
+
         f = await self.forecast_repo.get(forecast_id)
         if not f:
             raise ValueError(f"Forecast {forecast_id} not found")
@@ -165,7 +166,9 @@ class LifecycleManager:
                     resolved_count += 1
                 except Exception:
                     # Ground truth observations unavailable for resolution; transition to EXPIRED
-                    await self.forecast_repo.update_status(forecast.forecast_id, ForecastStatus.EXPIRED)
+                    await self.forecast_repo.update_status(
+                        forecast.forecast_id, ForecastStatus.EXPIRED
+                    )
                     expired_count += 1
                 continue
 

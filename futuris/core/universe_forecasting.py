@@ -7,17 +7,23 @@ owns only the request/response shape and delegates here.
 
 import asyncio
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from futuris.connectors.intelx_context import IntelXContextInjector
-from futuris.core.enums import ConfidenceLevel, ForecastStatus, SignalClass, SourceTrust
+from futuris.core.enums import (
+    ConfidenceLevel,
+    EvidenceClass,
+    ForecastStatus,
+    SignalClass,
+    SourceTrust,
+)
+from futuris.core.hashing import content_hash_of
 from futuris.core.schemas import Driver, EvidenceRef, Forecast
-from futuris.core.universe_domains import UNIVERSE_TARGETS, get_target_spec
-from futuris.infra.config import settings
+from futuris.core.universe_domains import UNIVERSE_TARGETS, DomainTargetSpec, get_target_spec
 from futuris.infra.logging import get_logger
 from futuris.storage.repositories import ForecastRepository
 
@@ -30,200 +36,47 @@ logger = get_logger("futuris.core.universe_forecasting")
 # paces rather than in whichever route happens to call it.
 REFRESH_BUDGET_SECONDS = 15.0
 
+#: Slack added to a target's deadline so the timer never cancels an in-flight
+#: database write.
+WRITE_GRACE_SECONDS = 2.0
+
 
 async def generate_universe_forecast(
     target: str,
     context: dict[str, Any] | None = None,
     session: AsyncSession | None = None,
     skip_intelx: bool = False,
+    model_budget_seconds: float | None = None,
 ) -> Forecast:
-    """Deterministically compute or calibrate a forecast for any FRIDAY Universe target."""
+    """Produce a forecast for any FRIDAY Universe target.
+
+    There are exactly two honest ways to obtain a number here, and each is
+    labelled with the provenance the client renders:
+
+    * the caller supplies the estimate (``context.point_estimate`` /
+      ``context.current_value`` / ``context.probability``) -- the number is
+      echoed back and marked ``synthetic`` with the caller named as the source;
+    * nobody supplies one -- the forecasting pipeline computes a number from the
+      configured telemetry generator and the forecast is marked ``synthetic``
+      with that generator named as the source.
+
+    When neither path can produce a number the forecast is returned in
+    ``insufficient_data`` status with the reason recorded, never a placeholder
+    value standing in for a forecast.
+    """
     spec = get_target_spec(target)
     now = datetime.now(UTC)
-    ctx = context or {}
+    ctx = dict(context or {})
 
-    # Query IntelX context if available (skip during pytest or seeding to avoid network latency)
-    intelx_findings = []
-    intelx_included = False
-    if not skip_intelx:
-        try:
-            import sys
-            if "pytest" not in sys.modules:
-                injector = IntelXContextInjector(
-                    base_url=settings.INTELX_URL,
-                    api_key=settings.INTELX_API_KEY,
-                    timeout_seconds=1.5,
-                )
-                reports = await injector.fetch_recent_research(target, as_of=now)
-                if reports:
-                    intelx_findings = [f"intelx:{r.summary[:45]}" for r in reports]
-                    intelx_included = True
-        except Exception as exc:
-            logger.debug("intelx_prediction_enrichment_skipped", target=target, error=str(exc))
+    intelx_findings = await _fetch_intelx_context(target, now) if not skip_intelx else []
 
-    # Base values derived from target spec and context overrides
-    pred_override = ctx.get("point_estimate") or ctx.get("current_value")
-    prob_override = ctx.get("probability")
-
-    if target == "friday:orchestration:system_health_24h":
-        prediction = float(pred_override or 94.5)
-        prob = None
-        r_lower, r_upper = prediction - 4.0, min(100.0, prediction + 3.0)
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["active_nodes:9/9", "cluster_heartbeat:100%", "failover_readiness:0.98"]
-    elif target == "friday:eventbus:message_backlog_24h":
-        prob = float(prob_override or 0.14)
-        prediction = prob * 100.0
-        r_lower, r_upper = 5.0, 28.0
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["worker_pool_capacity:85%", "webhook_retry_rate:0.012"]
-    elif target == "sentinel:security:threat_anomaly_risk_24h":
-        prob = float(prob_override or 0.12)
-        prediction = prob * 100.0
-        r_lower, r_upper = 4.0, 22.0
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["auth_anomaly_score:0.08", "ip_reputation_index:0.94"]
-    elif target == "sentinel:ratelimit:api_saturation_risk_24h":
-        prob = float(prob_override or 0.18)
-        prediction = prob * 100.0
-        r_lower, r_upper = 8.0, 32.0
-        conf = ConfidenceLevel.MEDIUM
-        drivers_list = ["token_bucket_fill_rate:nominal", "burst_traffic_variance:0.21"]
-    elif target == "cortex:execution:sla_breach_probability_24h":
-        prob = float(prob_override or 0.09)
-        prediction = prob * 100.0
-        r_lower, r_upper = 3.0, 18.0
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["goal_recursion_depth:3", "cognitive_step_latency:420ms"]
-    elif target == "cortex:subagent:concurrency_thrashing_risk_24h":
-        prob = float(prob_override or 0.11)
-        prediction = prob * 100.0
-        r_lower, r_upper = 4.0, 25.0
-        conf = ConfidenceLevel.MEDIUM
-        drivers_list = ["active_subagent_conversations:4", "lock_contention:0.05"]
-    elif target == "forge:ci_cd:pipeline_failure_risk_24h":
-        prob = float(prob_override or 0.08)
-        prediction = prob * 100.0
-        r_lower, r_upper = 2.0, 16.0
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["docker_layer_cache_hit_rate:0.92", "pytest_flakiness_idx:0.02"]
-    elif target == "forge:deployment:regression_risk_24h":
-        prob = float(prob_override or 0.06)
-        prediction = prob * 100.0
-        r_lower, r_upper = 1.5, 14.0
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["canary_anomaly_delta:0.01", "migration_rollback_verified:true"]
-    elif target == "memora:storage:capacity_exhaustion_days":
-        prediction = float(pred_override or 48.0)
-        prob = None
-        r_lower, r_upper = prediction - 8.0, prediction + 12.0
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["vector_dim_growth_rate:12mb/day", "sqlite_prune_efficiency:0.89"]
-    elif target == "memora:vector_index:retrieval_latency_spike_24h":
-        prob = float(prob_override or 0.15)
-        prediction = prob * 100.0
-        r_lower, r_upper = 6.0, 26.0
-        conf = ConfidenceLevel.MEDIUM
-        drivers_list = ["hnsw_index_fragmentation:0.12", "cache_hit_ratio:0.88"]
-    elif target == "inference:gpu:vram_oom_probability_24h":
-        prob = float(prob_override or 0.14)
-        prediction = prob * 100.0
-        r_lower, r_upper = 5.0, 24.0
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["kv_cache_headroom_pct:0.38", "concurrent_context_windows:6"]
-    elif target == "inference:queue:token_starvation_risk_24h":
-        prob = float(prob_override or 0.16)
-        prediction = prob * 100.0
-        r_lower, r_upper = 7.0, 28.0
-        conf = ConfidenceLevel.MEDIUM
-        drivers_list = ["worker_stream_occupancy:0.62", "p95_queue_duration:1.4s"]
-    elif target == "intelx:research:topic_velocity_surge_24h":
-        prediction = float(pred_override or 1.45)
-        prob = 0.32
-        r_lower, r_upper = 0.9, 2.2
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["arxiv_ingestion_rate:140/hr", "cross_domain_citation_burst:true"]
-    elif target == "intelx:source:rate_limit_depletion_24h":
-        prob = float(prob_override or 0.19)
-        prediction = prob * 100.0
-        r_lower, r_upper = 8.0, 34.0
-        conf = ConfidenceLevel.MEDIUM
-        drivers_list = ["search_api_daily_quota_consumed:0.41", "crawler_backoff_events:3"]
-    elif "BTCUSDT" in target:
-        prediction = float(pred_override or 0.38)
-        prob = float(prob_override or 0.28)
-        r_lower, r_upper = -2.8, 4.6
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["stratex_volatility_idx:0.38", "spot_etf_inflows:trending_positive"]
-    elif "ETHUSDT" in target:
-        prediction = float(pred_override or 0.42)
-        prob = float(prob_override or 0.34)
-        r_lower, r_upper = -3.2, 5.1
-        conf = ConfidenceLevel.MEDIUM
-        drivers_list = ["l2_settlement_acceleration:positive", "gas_burn_velocity:stable"]
-    elif "drawdown_risk" in target:
-        prob = float(prob_override or 0.11)
-        prediction = prob * 100.0
-        r_lower, r_upper = 5.0, 25.0
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["portfolio_hedge_ratio:0.65", "max_position_concentration:0.18"]
-    elif "capacity" in target or "checkout" in target:
-        prediction = float(pred_override or 2840.0)
-        prob = float(prob_override or 0.24)
-        r_lower, r_upper = 2100.0, 3650.0
-        conf = ConfidenceLevel.HIGH
-        drivers_list = ["historical_seasonality:peak_evening", "organic_growth_trend:+2.5rpm/d"]
+    supplied = _caller_supplied_values(ctx)
+    if supplied.must_emit:
+        forecast = _forecast_from_caller_context(spec, supplied, ctx, now, intelx_findings)
     else:
-        prediction = float(pred_override or 0.25)
-        prob = float(prob_override or 0.25)
-        r_lower, r_upper = 0.1, 0.5
-        conf = ConfidenceLevel.MEDIUM
-        drivers_list = ["system_baseline:stable"]
-
-    if intelx_findings:
-        drivers_list.extend(intelx_findings[:2])
-
-    # Build evidence and drivers
-    evidence_id = uuid4()
-    evidence_ref = EvidenceRef(
-        evidence_id=evidence_id,
-        source="universe:telemetry:calibrated",
-        source_trust=SourceTrust.HIGH,
-        signal_class=SignalClass.TELEMETRY,
-        as_of=now,
-        snapshot_path=f"data/storage/universe_{spec.domain.value}_snap.parquet",
-        content_hash="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    )
-
-    drivers = [
-        Driver(
-            name=d_name,
-            direction="positive" if "positive" in d_name or "100%" in d_name else "neutral",
-            strength=0.85,
-            leading_or_lagging="leading",
-            evidence_refs=[evidence_id],
+        forecast = await _forecast_from_pipeline(
+            spec, target, now, intelx_findings, model_budget_seconds=model_budget_seconds
         )
-        for d_name in drivers_list
-    ]
-
-    forecast = Forecast(
-        forecast_id=uuid4(),
-        target=target,
-        as_of=now,
-        horizon=timedelta(hours=24),
-        expires_at=now + timedelta(hours=24),
-        review_at=now + timedelta(hours=6),
-        prediction=prediction,
-        range_lower=r_lower,
-        range_upper=r_upper,
-        probability=prob,
-        confidence=conf,
-        drivers=drivers,
-        evidence=[evidence_ref],
-        assumptions=[f"FRIDAY Universe {spec.domain.value.upper()} baseline operation within nominal bounds"],
-        model_version=spec.default_model,
-        status=ForecastStatus.ACTIVE,
-    )
 
     if session is not None:
         repo = ForecastRepository(session)
@@ -231,6 +84,228 @@ async def generate_universe_forecast(
         await session.commit()
 
     return forecast
+
+
+@dataclass
+class _CallerValues:
+    """Values the caller explicitly supplied, if any."""
+
+    point: float | None = None
+    probability: float | None = None
+    range_lower: float | None = None
+    range_upper: float | None = None
+
+    @property
+    def must_emit(self) -> bool:
+        return self.point is not None or self.probability is not None
+
+
+def _caller_supplied_values(ctx: dict[str, Any]) -> _CallerValues:
+    point = ctx.get("point_estimate", ctx.get("current_value"))
+    lower = ctx.get("range_lower")
+    upper = ctx.get("range_upper")
+    return _CallerValues(
+        point=float(point) if point is not None else None,
+        probability=float(ctx["probability"]) if ctx.get("probability") is not None else None,
+        range_lower=float(lower) if lower is not None else None,
+        range_upper=float(upper) if upper is not None else None,
+    )
+
+
+async def _fetch_intelx_context(target: str, as_of: datetime) -> list[str]:
+    """Fetch live IntelX research context, tolerating an unreachable peer."""
+    from futuris.infra.research_context import fetch_research_reports, finding_labels
+
+    return finding_labels(await fetch_research_reports(target, as_of))
+
+
+def _context_drivers(ctx: dict[str, Any], evidence_id: UUID) -> list[Driver]:
+    """Drivers named after the context keys the caller actually supplied."""
+    ignored = {"point_estimate", "current_value", "probability", "range_lower", "range_upper"}
+    drivers: list[Driver] = []
+    for key, value in ctx.items():
+        if key in ignored or isinstance(value, dict | list):
+            continue
+        drivers.append(
+            Driver(
+                name=f"context.{key}={value}",
+                direction="neutral",
+                strength=0.5,
+                leading_or_lagging="leading",
+                evidence_refs=[evidence_id],
+            )
+        )
+    return drivers
+
+
+def _forecast_from_caller_context(
+    spec: DomainTargetSpec,
+    supplied: _CallerValues,
+    ctx: dict[str, Any],
+    now: datetime,
+    intelx_findings: list[str],
+) -> Forecast:
+    """Echo caller-supplied estimates, labelled for exactly what they are."""
+    point = supplied.point if supplied.point is not None else (supplied.probability or 0.0) * 100.0
+    probability = supplied.probability
+    assumptions = ["caller_supplied_context"]
+
+    lower, upper = supplied.range_lower, supplied.range_upper
+    if lower is None or upper is None:
+        # No interval was supplied. The +/-10% band below is a stated policy,
+        # recorded in `assumptions`, not a measured uncertainty.
+        half_span = abs(point) * 0.10 or 1.0
+        lower = point - half_span if lower is None else lower
+        upper = point + half_span if upper is None else upper
+        assumptions.append("range_derived_as_+/-10%_of_caller_estimate")
+
+    evidence_id = uuid4()
+    evidence = EvidenceRef(
+        evidence_id=evidence_id,
+        source="caller_context",
+        source_trust=SourceTrust.MEDIUM,
+        signal_class=SignalClass.HUMAN_INPUT,
+        as_of=now,
+        snapshot_path=f"inline://universe/{spec.target}/caller-context.json",
+        content_hash=content_hash_of(
+            {"target": spec.target, "as_of": now.isoformat(), "context": ctx}
+        ),
+        evidence_class=EvidenceClass.SYNTHETIC,
+    )
+
+    drivers = _context_drivers(ctx, evidence_id)
+    drivers.extend(
+        Driver(
+            name=finding,
+            direction="neutral",
+            strength=0.5,
+            leading_or_lagging="leading",
+            evidence_refs=[evidence_id],
+        )
+        for finding in intelx_findings[:2]
+    )
+
+    return Forecast(
+        forecast_id=uuid4(),
+        target=spec.target,
+        as_of=now,
+        horizon=timedelta(hours=24),
+        expires_at=now + timedelta(hours=24),
+        review_at=now + timedelta(hours=6),
+        prediction=point,
+        range_lower=lower,
+        range_upper=upper,
+        probability=probability,
+        confidence=ConfidenceLevel.LOW,
+        drivers=drivers,
+        evidence=[evidence],
+        assumptions=assumptions,
+        model_version=spec.default_model,
+        status=ForecastStatus.ACTIVE,
+        evidence_class=EvidenceClass.SYNTHETIC,
+        evidence_source="caller_supplied_context",
+        model_metadata={
+            "source": "caller_supplied_context",
+            "caller_supplied_fields": sorted(
+                k for k in ctx if k in {"point_estimate", "current_value", "probability"}
+            ),
+            "calibration_notes": (
+                "No resolved outcomes back this target; confidence is reported LOW "
+                "because calibration quality is unmeasured, not because the estimate "
+                "is likely wrong."
+            ),
+            "intelx_context_included": bool(intelx_findings),
+            "prediction_is_not_authorization": True,
+        },
+    )
+
+
+async def _forecast_from_pipeline(
+    spec: DomainTargetSpec,
+    target: str,
+    now: datetime,
+    intelx_findings: list[str],
+    model_budget_seconds: float | None = None,
+) -> Forecast:
+    """Compute the forecast from configured telemetry, or refuse honestly."""
+    from futuris.core.pipeline import ForecastingPipeline
+
+    try:
+        pipeline = ForecastingPipeline()
+        result = await pipeline.run(
+            target=target,
+            as_of=now,
+            horizon=timedelta(hours=24),
+            lookback_days=14,
+            capacity_threshold=spec.high_risk_threshold,
+            model_budget_seconds=model_budget_seconds,
+        )
+    except Exception as exc:
+        logger.warning("universe_forecast_insufficient_data", target=target, error=str(exc))
+        return _insufficient_data_forecast(spec, now, error=exc, intelx_findings=intelx_findings)
+
+    forecast = result.forecast
+    forecast.evidence_class = EvidenceClass.SYNTHETIC
+    forecast.evidence_source = "synthetic_telemetry_generator"
+    forecast.assumptions = [
+        *forecast.assumptions,
+        "numbers derived from the configured telemetry generator, not from measured production "
+            "telemetry",
+    ]
+    forecast.model_metadata = {
+        **forecast.model_metadata,
+        "intelx_context_included": bool(intelx_findings),
+        "stage_durations_ms": result.stage_durations_ms,
+    }
+    for finding in intelx_findings[:2]:
+        forecast.drivers.append(
+            Driver(
+                name=finding,
+                direction="neutral",
+                strength=0.5,
+                leading_or_lagging="leading",
+                evidence_refs=[d.evidence_id for d in forecast.evidence][:1],
+            )
+        )
+    return forecast
+
+
+def _insufficient_data_forecast(
+    spec: DomainTargetSpec,
+    now: datetime,
+    *,
+    error: Exception,
+    intelx_findings: list[str] | None = None,
+) -> Forecast:
+    """Return a forecast that states it has no numbers, instead of inventing them."""
+    reason = f"{type(error).__name__}: {error}"
+    return Forecast(
+        forecast_id=uuid4(),
+        target=spec.target,
+        as_of=now,
+        horizon=timedelta(hours=24),
+        expires_at=now + timedelta(hours=24),
+        review_at=now + timedelta(hours=6),
+        prediction=0.0,
+        range_lower=0.0,
+        range_upper=0.0,
+        probability=None,
+        confidence=ConfidenceLevel.INSUFFICIENT_DATA,
+        drivers=[],
+        evidence=[],
+        assumptions=[f"INSUFFICIENT_DATA: {reason}"],
+        model_version="none",
+        status=ForecastStatus.INSUFFICIENT_DATA,
+        evidence_class=EvidenceClass.SYNTHETIC,
+        evidence_source=None,
+        model_metadata={
+            "blocked_reason": "insufficient_data_detected",
+            "error": reason,
+            "intelx_context_included": bool(intelx_findings),
+            "prediction_is_not_authorization": True,
+        },
+        calibration_metrics={"error": "insufficient_data", "detail": reason},
+    )
 
 
 async def _paced_pass(
@@ -259,22 +334,48 @@ async def _paced_pass(
             )
             break
         try:
+            # The compute is already bounded by ``model_budget_seconds``; the
+            # grace period exists so the timer does not cancel the tiny write
+            # that follows a fit. Cancelling a flush invalidates the connection
+            # and leaves the session unusable, which is far worse than finishing
+            # a fraction of a second late.
             forecast = await asyncio.wait_for(
-                generate_universe_forecast(target, session=session),
-                timeout=remaining,
+                generate_universe_forecast(
+                    target, session=session, model_budget_seconds=max(0.1, remaining - 0.25)
+                ),
+                timeout=remaining + WRITE_GRACE_SECONDS,
             )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             logger.warning(
                 "refresh_target_timed_out",
                 target=target,
                 budget_seconds=budget_seconds,
             )
+            await _recover_session(session)
             break
         if sink is not None:
             sink[target] = forecast
         generated += 1
 
     return generated
+
+
+async def _recover_session(session: AsyncSession) -> None:
+    """Clear the pending-rollback state a cancelled write leaves behind.
+
+    ``asyncio.wait_for`` can cancel a target in the middle of its INSERT, after
+    which the session refuses all further use. That used to turn a bounded
+    refresh into a 500 on the matrix pass. Only the cancelled target's write is
+    lost: every completed target was committed by
+    :func:`generate_universe_forecast`.
+    """
+    if getattr(session, "is_active", True):
+        return
+    try:
+        await session.rollback()
+        logger.info("refresh_session_recovered_from_cancelled_write")
+    except Exception as exc:
+        logger.warning("refresh_session_recovery_failed", error=str(exc))
 
 
 async def refresh_all_within_budget(

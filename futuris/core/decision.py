@@ -18,23 +18,41 @@ from futuris.core.schemas import Forecast
 
 class AuthorizationViolationError(RuntimeError):
     """Raised when an unauthorized direct execution is attempted from a forecast."""
+
     pass
 
 
 DANGEROUS_COMMAND_PATTERNS = [
-    "bash", "sh", "sudo", "rm ", "kubectl", "terraform", "curl", "wget",
-    "docker", "chmod", "iptables", "systemctl", "deploy", "patch_website",
-    "apply_mitigation", "exec", "eval", "reboot", "shutdown",
+    "bash",
+    "sh",
+    "sudo",
+    "rm ",
+    "kubectl",
+    "terraform",
+    "curl",
+    "wget",
+    "docker",
+    "chmod",
+    "iptables",
+    "systemctl",
+    "deploy",
+    "patch_website",
+    "apply_mitigation",
+    "exec",
+    "eval",
+    "reboot",
+    "shutdown",
 ]
 
 
 def validate_prediction_authorization_separation(action_or_command: str) -> None:
-    """Ensure prediction cannot directly execute mitigations, system commands, or website changes."""
+    """Ensure a prediction can never execute mitigations, commands or site changes."""
     lower_cmd = action_or_command.lower()
     for pattern in DANGEROUS_COMMAND_PATTERNS:
         if pattern in lower_cmd:
             raise AuthorizationViolationError(
-                f"Prediction is not authorization: direct execution of '{pattern}' is strictly forbidden."
+                "Prediction is not authorization: direct execution of '{pattern}' is strictly "
+                    "forbidden."
             )
 
 
@@ -100,13 +118,13 @@ class DecisionSupport:
         expected_shortfall = max(0.0, forecast.prediction - capacity_threshold)
         if prob >= 0.50:
             impact_desc = (
-                f"High risk ({prob*100:.0f}% chance) of capacity breach. Projected demand "
+                f"High risk ({prob * 100:.0f}% chance) of capacity breach. Projected demand "
                 f"reaches {forecast.prediction:.0f} vs threshold {capacity_threshold:.0f} "
                 f"(shortfall ~{expected_shortfall:.0f} rpm)."
             )
         else:
             impact_desc = (
-                f"Moderate/Low risk ({prob*100:.0f}% chance). Baseline projection remains "
+                f"Moderate/Low risk ({prob * 100:.0f}% chance). Baseline projection remains "
                 f"bounded within {forecast.range_lower:.0f} - {forecast.range_upper:.0f} rpm."
             )
 
@@ -145,7 +163,7 @@ class DecisionSupport:
                 ActionSuggestion(
                     action_type="scale_capacity",
                     target=forecast.target,
-                    rationale=f"Forecast exceedance is {prob*100:.1f}%. Scaling absorbs peak.",
+                    rationale=f"Forecast exceedance is {prob * 100:.1f}%. Scaling absorbs peak.",
                     estimated_mitigation_effect="Reduces exceedance risk to < 5%",
                     requires_approval=True,
                 )
