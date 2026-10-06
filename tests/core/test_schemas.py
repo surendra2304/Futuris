@@ -527,7 +527,7 @@ async def test_hmac_webhook_signature_and_dispatch():
         emitter.register_subscription(
             WebhookSubscription(
                 subscription_id=uuid4(),
-                url="http://mock-webhook/receive",
+                url="https://mock-webhook.invalid/receive",
                 event_types=[ForecastEventType.FORECAST_THRESHOLD_CROSSED],
                 secret=secret,
             )

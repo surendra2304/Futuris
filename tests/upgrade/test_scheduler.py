@@ -1,4 +1,5 @@
 import unittest
+
 from futuris.upgrade.scheduler import DistributedLeaseTable, SafeScheduler, ScheduleSpec
 
 

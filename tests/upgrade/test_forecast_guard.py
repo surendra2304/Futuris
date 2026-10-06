@@ -1,6 +1,13 @@
 import unittest
 from datetime import UTC, datetime, timedelta
-from futuris.upgrade.forecast_guard import DataLeakageError, SourcePolicy, ProductionDataSource, validate_point_in_time, compute_horizon_steps
+
+from futuris.upgrade.forecast_guard import (
+    DataLeakageError,
+    ProductionDataSource,
+    SourcePolicy,
+    compute_horizon_steps,
+    validate_point_in_time,
+)
 
 
 class ForecastGuardTests(unittest.TestCase):
@@ -14,7 +21,9 @@ class ForecastGuardTests(unittest.TestCase):
 
     def test_synthetic_rejected_in_prod(self):
         with self.assertRaises(ValueError):
-            SourcePolicy(True).validate(ProductionDataSource("synthetic", lambda a,b: None, synthetic=True))
+            SourcePolicy(True).validate(
+                ProductionDataSource("synthetic", lambda a, b: None, synthetic=True)
+            )
 
 
 if __name__ == "__main__":

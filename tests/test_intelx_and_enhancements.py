@@ -56,6 +56,7 @@ async def test_intelx_context_injection_and_adjustments():
 @pytest.mark.asyncio
 async def test_intelx_unavailable_returns_no_invented_research():
     """An unavailable IntelX service must not become fabricated sentiment evidence."""
+
     async def _unavailable(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(503)
 

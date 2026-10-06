@@ -1,5 +1,6 @@
 import sqlite3
 import unittest
+
 from futuris.upgrade.checkpoint import CheckpointManager
 
 

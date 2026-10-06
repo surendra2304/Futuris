@@ -76,14 +76,17 @@ class FakeSession:
 async def test_intelx_notice_is_saved_before_ack_and_duplicate_is_idempotent(monkeypatch):
     order = []
     rows = {}
-    fake_client = FakeMemora([
-        {
-            "id": 4,
-            "event_id": "intelx-run-4-all",
-            "event_type": "intelx.news",
-            "payload": {"headline": "Exchange notice", "source_agent": "intelx"},
-        }
-    ], order=order)
+    fake_client = FakeMemora(
+        [
+            {
+                "id": 4,
+                "event_id": "intelx-run-4-all",
+                "event_type": "intelx.news",
+                "payload": {"headline": "Exchange notice", "source_agent": "intelx"},
+            }
+        ],
+        order=order,
+    )
 
     async def persist_notice(_event, _payload):
         order.append("memora_commit")
@@ -115,14 +118,16 @@ async def test_intelx_notice_is_saved_before_ack_and_duplicate_is_idempotent(mon
 async def test_persistence_failure_does_not_ack_or_advance(monkeypatch):
     rows = {}
     memora_writes = []
-    fake_client = FakeMemora([
-        {
-            "id": 5,
-            "event_id": "intelx-run-5-all",
-            "event_type": "intelx.news",
-            "payload": {"headline": "Exchange notice"},
-        }
-    ])
+    fake_client = FakeMemora(
+        [
+            {
+                "id": 5,
+                "event_id": "intelx-run-5-all",
+                "event_type": "intelx.news",
+                "payload": {"headline": "Exchange notice"},
+            }
+        ]
+    )
 
     async def persist_notice(_event, _payload):
         memora_writes.append("persisted")
@@ -147,9 +152,9 @@ async def test_persistence_failure_does_not_ack_or_advance(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_other_event_is_skipped_but_acknowledged_in_order(monkeypatch):
-    fake_client = FakeMemora([
-        {"id": 6, "event_id": "evt-6", "event_type": "memory.created", "payload": {}}
-    ])
+    fake_client = FakeMemora(
+        [{"id": 6, "event_id": "evt-6", "event_type": "memory.created", "payload": {}}]
+    )
 
     @asynccontextmanager
     async def sessions():
@@ -343,9 +348,7 @@ async def test_durable_news_context_uses_only_matched_real_notices(monkeypatch):
     async def sessions():
         yield Session()
 
-    monkeypatch.setattr(
-        "futuris.connectors.intelx_context.async_session_factory", sessions
-    )
+    monkeypatch.setattr("futuris.connectors.intelx_context.async_session_factory", sessions)
     reports = await IntelXContextInjector().fetch_durable_notice_context("BTCUSDT")
 
     assert len(reports) == 1

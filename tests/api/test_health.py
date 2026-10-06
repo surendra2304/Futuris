@@ -33,8 +33,13 @@ async def test_health_declares_evidence_class_and_observation_time():
         response = await client.get("/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["evidence_class"] == "process_liveness"
+    # The health answer is a liveness probe *plus* a storage probe: it says so,
+    # and it names the storage measurement separately, because "the process
+    # answered" does not imply "the database is usable".
+    assert data["evidence_class"] == "process_liveness_plus_storage_probe"
     assert datetime.fromisoformat(data["observed_at"]).tzinfo is not None
+    assert data["storage"]["expected"] >= 1
+    assert isinstance(data["storage"]["missing"], list)
 
 
 @pytest.mark.asyncio

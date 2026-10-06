@@ -1,7 +1,8 @@
 """Prompt 7: Comprehensive Acceptance Test Suite for Futuris.
 
 Validates:
-1. Structured FRIDAY TaskEnvelope with predictive distributions, intervals, calibration metrics, model metadata.
+1. Structured FRIDAY TaskEnvelope with predictive distributions, intervals and
+   calibration metrics.
 2. Cortex consumption without direct execution authority.
 3. Stale-data detection producing BLOCKED / INSUFFICIENT_DATA status.
 4. Insufficient-data detection producing INSUFFICIENT_DATA status.
@@ -29,19 +30,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from futuris.api.app import app
 from futuris.api.deps import get_db_session
 from futuris.api.routers.friday import (
-    FridayForecastRequest,
     FridayForecastResponse,
     FridayScenarioResponse,
-    FridayTaskEnvelope,
 )
 from futuris.core.decision import (
     ActionSuggestion,
     AuthorizationViolationError,
     validate_prediction_authorization_separation,
 )
-from futuris.core.enums import ConfidenceLevel, ForecastStatus
 from futuris.evaluation.backtest import DataLeakageError, validate_backtest_leakage
-from futuris.evaluation.calibration import CalibrationAnalyzer, update_calibration_metrics
 from futuris.evaluation.drift import DriftMonitor
 from futuris.features.normalize import (
     DataStalenessError,
@@ -56,7 +53,6 @@ from futuris.features.normalize import (
 )
 from futuris.infra.audit import AuditLogger
 from futuris.storage.models import Base
-from futuris.storage.repositories import ForecastRepository, OutcomeRepository
 
 
 @pytest.fixture
@@ -102,8 +98,12 @@ def cortex_traffic_fixture() -> dict:
 
 # ── TEST 1: Structured Forecast with Distributions, Intervals, Calibration ──
 @pytest.mark.asyncio
-async def test_friday_structured_forecast_with_uncertainty(futuris_test_db: AsyncSession, auth_headers):
-    """Verify FRIDAY forecast returns predictive distribution, intervals, calibration and metadata."""
+async def test_friday_structured_forecast_with_uncertainty(
+    futuris_test_db: AsyncSession, auth_headers
+):
+    """Verify FRIDAY forecast returns predictive distribution, intervals, calibration and
+    metadata."""
+
     async def _override_db():
         yield futuris_test_db
 
@@ -132,10 +132,15 @@ async def test_friday_structured_forecast_with_uncertainty(futuris_test_db: Asyn
         assert "intervals" in data
         assert len(data["intervals"]) > 0
 
-        # Calibration metrics
+        # Calibration metrics: only measured values may be reported. Nothing has
+        # been resolved in this database, so the response must say so rather
+        # than serving a plausible-looking ECE.
         assert "calibration_metrics" in data
-        assert "ece" in data["calibration_metrics"]
-        assert "brier_score" in data["calibration_metrics"]
+        cal = data["calibration_metrics"]
+        assert "brier_score" in cal
+        assert cal.get("n_resolved_outcomes", 0) == 0
+        assert "ece" not in cal
+        assert cal.get("calibration_status") == "uncalibrated"
 
         # Model metadata
         assert "model_metadata" in data
@@ -150,8 +155,11 @@ async def test_friday_structured_forecast_with_uncertainty(futuris_test_db: Asyn
 
 # ── TEST 2: Cortex Consumption Without Execution Authority ──
 @pytest.mark.asyncio
-async def test_cortex_consumption_without_execution(futuris_test_db: AsyncSession, auth_headers, cortex_traffic_fixture):
+async def test_cortex_consumption_without_execution(
+    futuris_test_db: AsyncSession, auth_headers, cortex_traffic_fixture
+):
     """Verify Cortex consumes forecasts safely without receiving executable commands."""
+
     async def _override_db():
         yield futuris_test_db
 
@@ -177,7 +185,8 @@ async def test_cortex_consumption_without_execution(futuris_test_db: AsyncSessio
         assert data["executable_commands"] == []
         assert "prediction" in data["result"]
 
-        # Verify Futuris does NOT permit Cortex or any caller to execute mitigations or website changes
+        # Futuris must not let Cortex (or any caller) execute mitigations.
+        # Website changes are refused for the same reason.
         unauthorized_envelope = {
             "task_id": "cortex_malicious_exec_001",
             "source_agent": "cortex",
@@ -185,9 +194,13 @@ async def test_cortex_consumption_without_execution(futuris_test_db: AsyncSessio
             "action": "execute",
             "payload": {"command": "kubectl scale deployment cortex-web --replicas=10"},
         }
-        err_resp = await client.post("/v1/friday/delegate", headers=auth_headers, json=unauthorized_envelope)
+        err_resp = await client.post(
+            "/v1/friday/delegate", headers=auth_headers, json=unauthorized_envelope
+        )
         assert err_resp.status_code == 403
-        err_msg = err_resp.json().get("detail") or err_resp.json().get("error", {}).get("message", "")
+        err_msg = err_resp.json().get("detail") or err_resp.json().get("error", {}).get(
+            "message", ""
+        )
         assert "Prediction is not authorization" in err_msg
 
     app.dependency_overrides.clear()
@@ -195,7 +208,9 @@ async def test_cortex_consumption_without_execution(futuris_test_db: AsyncSessio
 
 # ── TEST 3: Stale Data Produces BLOCKED Status ──
 @pytest.mark.asyncio
-async def test_stale_data_produces_blocked_or_insufficient_data(futuris_test_db: AsyncSession, auth_headers):
+async def test_stale_data_produces_blocked_or_insufficient_data(
+    futuris_test_db: AsyncSession, auth_headers
+):
     """Verify stale telemetry triggers BLOCKED state and DataStalenessError."""
     # Direct library evaluation
     old_time = datetime.now(UTC) - timedelta(days=5)
@@ -232,7 +247,9 @@ async def test_stale_data_produces_blocked_or_insufficient_data(futuris_test_db:
 
 # ── TEST 4: Insufficient Data Produces INSUFFICIENT_DATA Status ──
 @pytest.mark.asyncio
-async def test_insufficient_data_produces_insufficient_data_status(futuris_test_db: AsyncSession, auth_headers):
+async def test_insufficient_data_produces_insufficient_data_status(
+    futuris_test_db: AsyncSession, auth_headers
+):
     """Verify telemetry with fewer than minimum points triggers INSUFFICIENT_DATA status."""
     # Direct library evaluation
     sparse_data = [{"timestamp": datetime.now(UTC).isoformat(), "value": 50.0}]
@@ -264,8 +281,11 @@ async def test_insufficient_data_produces_insufficient_data_status(futuris_test_
 
 # ── TEST 5: Resolved Forecasts Update Calibration Metrics ──
 @pytest.mark.asyncio
-async def test_resolved_forecasts_update_calibration_metrics(futuris_test_db: AsyncSession, auth_headers):
+async def test_resolved_forecasts_update_calibration_metrics(
+    futuris_test_db: AsyncSession, auth_headers
+):
     """Verify ground-truth outcomes update calibration metrics dynamically."""
+
     async def _override_db():
         yield futuris_test_db
 
@@ -310,7 +330,12 @@ def test_no_forecast_response_contains_executable_commands():
         FridayForecastResponse(
             futuris_forecast_id=uuid4(),
             friday_request_id="req_001",
-            prediction={"point_estimate": 100.0, "lower_bound": 90.0, "upper_bound": 110.0, "probability_distribution": {}},
+            prediction={
+                "point_estimate": 100.0,
+                "lower_bound": 90.0,
+                "upper_bound": 110.0,
+                "probability_distribution": {},
+            },
             confidence="HIGH",
             calibration_score=0.04,
             evidence_snapshot_id="snap_01",
@@ -344,7 +369,8 @@ def test_no_forecast_response_contains_executable_commands():
 # ── TEST 7: Prediction Is Not Authorization Invariant ──
 @pytest.mark.asyncio
 async def test_prediction_is_not_authorization_invariant(auth_headers):
-    """Verify direct command execution attempts fail-closed with 403 or AuthorizationViolationError."""
+    """Verify direct command execution attempts fail-closed with 403 or
+    AuthorizationViolationError."""
     # Direct function checks
     for cmd in ["sudo reboot", "kubectl scale deploy", "terraform apply", "patch_website"]:
         with pytest.raises(AuthorizationViolationError):
@@ -376,7 +402,11 @@ async def test_universal_task_endpoint_does_not_report_a_fabricated_forecast():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.post(
             "/v1/task/execute",
-            json={"task_id": "honesty-check", "action": "forecast", "payload": {"target": "BTCUSDT"}},
+            json={
+                "task_id": "honesty-check",
+                "action": "forecast",
+                "payload": {"target": "BTCUSDT"},
+            },
         )
 
     assert response.status_code == 501
@@ -481,7 +511,9 @@ def test_model_drift_detection():
 # ── TEST 13: Idempotency Deduplication and Task Cancellation ──
 @pytest.mark.asyncio
 async def test_idempotency_and_task_cancellation(futuris_test_db: AsyncSession, auth_headers):
-    """Verify idempotent forecast creation returns identical IDs, and cancellation updates status."""
+    """Verify idempotent forecast creation returns identical IDs, and cancellation updates
+    status."""
+
     async def _override_db():
         yield futuris_test_db
 
@@ -524,8 +556,11 @@ async def test_idempotency_and_task_cancellation(futuris_test_db: AsyncSession, 
 
 # ── TEST 14: Explicit Scenario Specifications and Assumptions ──
 @pytest.mark.asyncio
-async def test_explicit_scenario_specifications_and_assumptions(futuris_test_db: AsyncSession, auth_headers):
+async def test_explicit_scenario_specifications_and_assumptions(
+    futuris_test_db: AsyncSession, auth_headers
+):
     """Verify counterfactual scenario evaluation records explicit assumptions and specs."""
+
     async def _override_db():
         yield futuris_test_db
 
@@ -575,6 +610,7 @@ async def test_explicit_scenario_specifications_and_assumptions(futuris_test_db:
 @pytest.mark.asyncio
 async def test_secure_service_auth_and_audit_logging(futuris_test_db: AsyncSession, auth_headers):
     """Verify endpoint authentication security and immutable audit logging on state mutations."""
+
     async def _override_db():
         yield futuris_test_db
 
@@ -607,7 +643,9 @@ async def test_secure_service_auth_and_audit_logging(futuris_test_db: AsyncSessi
 
         # Verify audit log recorded via AuditLogger
         audit_logger = AuditLogger(futuris_test_db)
-        history = await audit_logger.get_entity_history("forecast", res_auth.json()["futuris_forecast_id"])
+        history = await audit_logger.get_entity_history(
+            "forecast", res_auth.json()["futuris_forecast_id"]
+        )
         assert len(history) >= 1
         assert history[0].action == "generate_forecast"
         assert len(history[0].payload_hash) == 64  # SHA-256 length

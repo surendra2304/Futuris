@@ -1,4 +1,5 @@
 import unittest
+
 from futuris.upgrade.scenario import Scenario, ScenarioEngine, ScenarioValidationError
 
 
