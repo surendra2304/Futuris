@@ -266,7 +266,14 @@ def test_unwritable_database_maps_to_storage_unavailable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_health_reports_measured_storage_state(client: httpx.AsyncClient) -> None:
+async def test_health_reports_measured_storage_state(
+    client: httpx.AsyncClient, health_storage
+) -> None:
+    """The health verdict measures real storage, so the test must own it.
+
+    Without ``health_storage`` this passed only where a schema-initialised
+    ``./data/futuris.db`` already existed, and failed on a clean checkout.
+    """
     response = await client.get("/health")
     assert response.status_code == 200
     body = response.json()
