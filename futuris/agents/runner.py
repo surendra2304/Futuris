@@ -13,7 +13,7 @@ logger = get_logger("futuris.agents.runner")
 
 
 class AgentRunner:
-    """Orchestrates SignalAnalyst and CalibrationAnalyst runs with concurrency-safe cost guardrails."""
+    """Orchestrate SignalAnalyst/CalibrationAnalyst runs with cost guardrails."""
 
     def __init__(
         self,

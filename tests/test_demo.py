@@ -47,6 +47,7 @@ async def test_demo_pipeline_e2e_execution(demo_db_session: AsyncSession):
 async def test_demo_api_endpoints_return_seeded_data(demo_db_session: AsyncSession):
     """Verify that after seeding, public API endpoints serve live forecast, scenarios, and calib."""
     from futuris.infra.auth import AuthUser, get_current_user
+
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield demo_db_session
 

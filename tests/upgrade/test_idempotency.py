@@ -1,4 +1,5 @@
 import unittest
+
 from futuris.upgrade.idempotency import IdempotencyConflict, IdempotencyStore
 
 

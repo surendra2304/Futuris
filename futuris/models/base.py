@@ -92,8 +92,7 @@ def calculate_exceedance_probability(
             return 1.0 if np.max(point_forecast) >= capacity_threshold else 0.0
 
         step_probs = [
-            float(1.0 - norm.cdf((capacity_threshold - mu) / sigma))
-            for mu in point_forecast
+            float(1.0 - norm.cdf((capacity_threshold - mu) / sigma)) for mu in point_forecast
         ]
         prob_none = np.prod([1.0 - p for p in step_probs])
         prob_exceed = float(1.0 - prob_none)

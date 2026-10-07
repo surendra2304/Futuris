@@ -1,7 +1,7 @@
 """
 Universal Memora Client for Futuris Autonomous Forecasting & Scenario Simulation
 """
-import os
+
 import sys
 from pathlib import Path
 

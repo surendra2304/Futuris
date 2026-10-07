@@ -15,7 +15,7 @@ class IdempotencyRecord:
     response: Any
 
 
-class IdempotencyConflict(RuntimeError):
+class IdempotencyConflictError(RuntimeError):
     pass
 
 
@@ -39,9 +39,15 @@ class IdempotencyStore:
                 raise IdempotencyConflict("same idempotency key used for different payload")
             return previous
 
-    async def commit(self, key: str, payload: Any, status_code: int, response: Any) -> IdempotencyRecord:
+    async def commit(
+        self, key: str, payload: Any, status_code: int, response: Any
+    ) -> IdempotencyRecord:
         digest = self.fingerprint(payload)
         record = IdempotencyRecord(key, digest, status_code, response)
         async with self._lock:
             self._records[key] = record
         return record
+
+
+# Backwards-compatible alias: older call sites import the short name.
+IdempotencyConflict = IdempotencyConflictError

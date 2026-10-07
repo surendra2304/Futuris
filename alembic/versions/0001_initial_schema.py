@@ -13,6 +13,16 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
+
+def _json():
+    """JSON column type: JSONB on Postgres, native JSON on SQLite.
+
+    Mirrors ``JSON().with_variant(JSONB, "postgresql")`` in the ORM models so
+    the initial migration can run on either dialect.
+    """
+    return sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql")
+
+
 # revision identifiers, used by Alembic.
 revision: str = "0001"
 down_revision: str | None = None
@@ -27,7 +37,7 @@ def upgrade() -> None:
         sa.Column("scenario_id", sa.UUID(), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("scenario_type", sa.String(length=50), nullable=False),
-        sa.Column("assumptions_override", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("assumptions_override", _json(), nullable=False),
         sa.Column("created_by", sa.String(length=255), nullable=False),
         sa.Column("parent_forecast_id", sa.UUID(), nullable=True),
         sa.PrimaryKeyConstraint("scenario_id"),
@@ -46,9 +56,9 @@ def upgrade() -> None:
         sa.Column("range_upper", sa.Float(), nullable=False),
         sa.Column("probability", sa.Float(), nullable=True),
         sa.Column("confidence", sa.String(length=50), nullable=False),
-        sa.Column("drivers", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("drivers", _json(), nullable=False),
         sa.Column("model_version", sa.String(length=255), nullable=False),
-        sa.Column("assumptions", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("assumptions", _json(), nullable=False),
         sa.Column("review_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("status", sa.String(length=50), nullable=False),
         sa.Column("scenario_id", sa.UUID(), nullable=True),
@@ -60,15 +70,17 @@ def upgrade() -> None:
     op.create_index("ix_forecasts_target_as_of", "forecasts", ["target", "as_of"])
     op.create_index("ix_forecasts_status", "forecasts", ["status"])
 
-    # Foreign key for scenario -> parent_forecast_id
-    op.create_foreign_key(
-        "fk_scenarios_parent_forecast_id",
-        "scenarios",
-        "forecasts",
-        ["parent_forecast_id"],
-        ["forecast_id"],
-        ondelete="SET NULL",
-    )
+    # Foreign key for scenario -> parent_forecast_id. Batch mode recreates the
+    # table on SQLite (which cannot ADD CONSTRAINT) and emits a plain ALTER on
+    # Postgres.
+    with op.batch_alter_table("scenarios") as batch_op:
+        batch_op.create_foreign_key(
+            "fk_scenarios_parent_forecast_id",
+            "forecasts",
+            ["parent_forecast_id"],
+            ["forecast_id"],
+            ondelete="SET NULL",
+        )
 
     # 3. evidence_refs table
     op.create_table(
@@ -108,7 +120,7 @@ def upgrade() -> None:
         sa.Column("event_id", sa.UUID(), nullable=False),
         sa.Column("forecast_id", sa.UUID(), nullable=True),
         sa.Column("event_type", sa.String(length=100), nullable=False),
-        sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("payload", _json(), nullable=False),
         sa.Column("emitted_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["forecast_id"], ["forecasts.forecast_id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("event_id"),
@@ -127,7 +139,7 @@ def upgrade() -> None:
         sa.Column("signal_class", sa.String(length=50), nullable=False),
         sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
         sa.Column("value", sa.Float(), nullable=False),
-        sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("payload", _json(), nullable=False),
         sa.PrimaryKeyConstraint("observation_id"),
     )
     op.create_index("ix_observations_source_timestamp", "observations", ["source", "timestamp"])
@@ -139,7 +151,7 @@ def upgrade() -> None:
         sa.Column("source_name", sa.String(length=255), nullable=False),
         sa.Column("signal_class", sa.String(length=50), nullable=False),
         sa.Column("source_trust", sa.String(length=50), nullable=False),
-        sa.Column("config", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("config", _json(), nullable=False),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("source_id"),
     )
@@ -152,7 +164,7 @@ def upgrade() -> None:
         sa.Column("config_hash", sa.String(length=64), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False, default=False),
         sa.Column("promoted_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("benchmark_scores", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("benchmark_scores", _json(), nullable=False),
         sa.PrimaryKeyConstraint("model_version"),
     )
     op.create_index("ix_model_registry_is_active", "model_registry", ["is_active"])
@@ -163,7 +175,7 @@ def upgrade() -> None:
         sa.Column("run_id", sa.UUID(), nullable=False),
         sa.Column("model_version", sa.String(length=255), nullable=False),
         sa.Column("dataset_name", sa.String(length=255), nullable=False),
-        sa.Column("metrics", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("metrics", _json(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(
             ["model_version"], ["model_registry.model_version"], ondelete="CASCADE"

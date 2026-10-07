@@ -26,16 +26,14 @@ class ResolutionRule(Protocol):
     """Protocol for versioned target resolution logic."""
 
     @property
-    def meta(self) -> ResolutionRuleMeta:
-        ...
+    def meta(self) -> ResolutionRuleMeta: ...
 
     def resolve(
         self,
         forecast: Forecast,
         observation_records: pd.DataFrame,
         evidence_snapshot_data: pd.DataFrame | None = None,
-    ) -> Outcome:
-        ...
+    ) -> Outcome: ...
 
 
 class CapacityExceedanceResolutionRuleV1:

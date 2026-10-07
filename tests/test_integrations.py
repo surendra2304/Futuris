@@ -94,12 +94,10 @@ async def test_friday_client_sdk_integration():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    session_factory = async_sessionmaker(
-        bind=engine, class_=AsyncSession, expire_on_commit=False
-    )
+    session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     async with session_factory() as session:
-
         from futuris.infra.auth import AuthUser, get_current_user
+
         async def _override_get_db():
             yield session
 

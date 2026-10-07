@@ -85,9 +85,7 @@ def build_forecast_envelope(
         separators=(",", ":"),
         default=str,
     ).encode("utf-8")
-    envelope["signature"] = hmac.new(
-        signing_key.encode("utf-8"), raw, hashlib.sha256
-    ).hexdigest()
+    envelope["signature"] = hmac.new(signing_key.encode("utf-8"), raw, hashlib.sha256).hexdigest()
     return envelope
 
 

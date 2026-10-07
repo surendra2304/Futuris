@@ -9,7 +9,13 @@ from pydantic import BaseModel, Field
 from futuris.api.deps import get_event_emitter, get_event_repo
 from futuris.core.enums import ForecastEventType
 from futuris.core.schemas import ForecastEvent
-from futuris.infra.events import EventEmitter, WebhookSubscription
+from futuris.infra.auth import RequireAnalyst, RequireViewer
+from futuris.infra.events import (
+    EventEmitter,
+    UnsafeWebhookUrlError,
+    WebhookSubscription,
+    assert_safe_webhook_url,
+)
 from futuris.storage.repositories import EventRepository
 
 router = APIRouter(prefix="/v1", tags=["Events & Webhooks"])
@@ -35,12 +41,14 @@ class WebhookCreatedResponse(BaseModel):
 
 @router.get("/events", response_model=list[ForecastEvent], summary="List Domain Events")
 async def list_events(
+    user: RequireViewer,
     event_type: ForecastEventType | None = Query(None),
     since: datetime | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     event_repo: EventRepository = Depends(get_event_repo),
 ) -> list[ForecastEvent]:
     """List audit events with cursor/filter capabilities."""
+    _ = user
     if event_type:
         events = await event_repo.list_by_type(event_type)
     else:
@@ -56,13 +64,21 @@ async def list_events(
     "/webhooks",
     response_model=WebhookCreatedResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Subscribe to Webhooks",
+    summary="Subscribe to Webhooks (Analyst+)",
 )
 async def create_webhook(
     req: WebhookCreateRequest,
+    user: RequireAnalyst,
     emitter: EventEmitter = Depends(get_event_emitter),
 ) -> WebhookCreatedResponse:
     """Register webhook subscription and return HMAC-SHA256 signature secret ONCE."""
+    _ = user
+    # Fail closed on SSRF-shaped targets before storing the subscription.
+    try:
+        assert_safe_webhook_url(req.url)
+    except UnsafeWebhookUrlError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     sub_id = uuid4()
     secret = f"whsec_{uuid4().hex}"
 
@@ -89,8 +105,10 @@ async def create_webhook(
 )
 async def delete_webhook(
     subscription_id: UUID,
+    user: RequireAnalyst,
     emitter: EventEmitter = Depends(get_event_emitter),
 ) -> None:
+    _ = user  # auth dependency; identity handled by the role guard
     """Remove a webhook subscription."""
     for sub in list(emitter.subscriptions):
         if sub.subscription_id == subscription_id:

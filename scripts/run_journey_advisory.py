@@ -62,7 +62,9 @@ async def _find_journey_signal(correlation_id: str, pages: int = 10) -> dict | N
 
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--correlation-id", required=True, help="Journey correlation ID published by IntelX")
+    parser.add_argument(
+        "--correlation-id", required=True, help="Journey correlation ID published by IntelX"
+    )
     args = parser.parse_args()
 
     # Hop 1: durable inbox — persist + ack with Futuris's independent cursor.
@@ -71,7 +73,15 @@ async def main() -> int:
     # Hop 2: replay-scan for the journey's signal (read-only).
     event = await _find_journey_signal(args.correlation_id)
     if event is None:
-        print(json.dumps({"status": "signal_not_found", "correlation_id": args.correlation_id, "inbox_handled": handled}))
+        print(
+            json.dumps(
+                {
+                    "status": "signal_not_found",
+                    "correlation_id": args.correlation_id,
+                    "inbox_handled": handled,
+                }
+            )
+        )
         return 1
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     signal_id = str(payload.get("signal_id") or event.get("event_id") or "unknown")[:64]

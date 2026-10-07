@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-import asyncio
+from uuid import uuid4
+
 import httpx
 
 from futuris.infra.config import settings
+from futuris.infra.logging import get_logger
+from futuris.infra.metrics import PEER_CALL_TOTAL
+from futuris.infra.resilience import peer_circuits
 from futuris.upgrade.models import FailureKind, ProviderResult
 
 
@@ -38,10 +44,6 @@ class SentinelGovernanceEvent:
     timestamp: datetime
 
 
-import time
-from uuid import uuid4
-from futuris.infra.logging import get_logger
-
 logger = get_logger("futuris.ecosystem.adapters")
 
 
@@ -62,7 +64,7 @@ class EcosystemAdapter:
         contextual_factors: list[str] | None = None,
         target_context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """Call live Inference Gateway /v1/futuris/enhance to get specialist multi-agent qualitative grounding."""
+        """Call Inference Gateway /v1/futuris/enhance for qualitative grounding."""
         url = f"{settings.INFERENCE_URL.rstrip('/')}/v1/futuris/enhance"
         headers = {
             "Authorization": f"Bearer {settings.INFERENCE_API_KEY}",
@@ -79,14 +81,17 @@ class EcosystemAdapter:
             },
             "target_context": target_context or {"domain": "cloud_infrastructure"},
             "contextual_factors": contextual_factors or ["Operating within nominal bounds"],
-            "question": "Given this forecast and context, what risks or drivers should be considered?",
+            "question": "Given this forecast and context, what risks or drivers should be "
+                "considered?",
         }
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(url, json=body, headers=headers)
                 if resp.status_code == 200:
                     return resp.json()
-                logger.warning("inference_enhance_non_200", status=resp.status_code, body=resp.text[:200])
+                logger.warning(
+                    "inference_enhance_non_200", status=resp.status_code, body=resp.text[:200]
+                )
         except Exception as exc:
             logger.warning("inference_enhance_failed", error=str(exc))
         return None
@@ -122,7 +127,7 @@ class EcosystemAdapter:
                 )
 
     async def publish_memora_candidate(self, candidate: MemoraMemoryCandidate) -> bool:
-        """Publish approved memory candidate to Memora cloud memory under futuris/forecasts namespace."""
+        """Publish an approved memory candidate under the futuris/forecasts namespace."""
         if not settings.MEMORA_API_KEY:
             logger.error("memora_publish_blocked_missing_agent_credential")
             return False
@@ -189,7 +194,9 @@ class EcosystemAdapter:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(url, json=forecast_payload, headers=headers)
                 if resp.status_code in {200, 201, 202}:
-                    logger.info("stratex_market_forecast_dispatched", symbol=symbol, status=resp.status_code)
+                    logger.info(
+                        "stratex_market_forecast_dispatched", symbol=symbol, status=resp.status_code
+                    )
                     return True
         except Exception as exc:
             logger.debug("stratex_market_forecast_dispatch_skipped", symbol=symbol, error=str(exc))
@@ -275,11 +282,32 @@ class EcosystemAdapter:
         ]
 
         async def _check_peer(client: httpx.AsyncClient, p: dict[str, Any]) -> dict[str, Any]:
+            breaker = peer_circuits.for_peer(p["name"])
+            if not breaker.allow_request():
+                # The peer is already known to be failing. Probing it again on
+                # every request is what turns one dead peer into a latency
+                # amplifier for the whole mesh.
+                breaker.total_short_circuits += 1
+                PEER_CALL_TOTAL.labels(peer=p["name"], outcome="short_circuited").inc()
+                return {
+                    "name": p["name"],
+                    "role": p["role"],
+                    "url": p["url"],
+                    "status": "isolated",
+                    "latency_ms": None,
+                    "evidence_class": "circuit_open",
+                    "http_status": None,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "capabilities": p["capabilities"],
+                    "circuit": breaker.snapshot(),
+                }
+
             t0 = time.perf_counter()
             status_str = "offline"
             latency_ms = None
             http_status: int | None = None
             evidence_class = "probe_failed"
+            breaker.total_calls += 1
             try:
                 resp = await client.get(p["probe_url"], headers=p["headers"], timeout=1.5)
                 latency_ms = round((time.perf_counter() - t0) * 1000, 1)
@@ -288,13 +316,24 @@ class EcosystemAdapter:
                     status_str = "online"
                     evidence_class = "http_health_200"
                 elif resp.status_code in (401, 403, 404):
+                    # Reachable but not answering as a healthy peer would;
+                    # this is not a transport failure, so it does not trip the
+                    # breaker.
                     status_str = "degraded"
                     evidence_class = "http_health_non_200"
                 else:
                     status_str = "offline"
                     evidence_class = "http_health_non_200"
-            except Exception:
+                if resp.status_code >= 500:
+                    breaker.record_failure(f"http_{resp.status_code}")
+                    PEER_CALL_TOTAL.labels(peer=p["name"], outcome="failed").inc()
+                else:
+                    breaker.record_success()
+                    PEER_CALL_TOTAL.labels(peer=p["name"], outcome="ok").inc()
+            except Exception as exc:
                 status_str = "offline"
+                breaker.record_failure(f"{type(exc).__name__}: {exc}")
+                PEER_CALL_TOTAL.labels(peer=p["name"], outcome="failed").inc()
 
             return {
                 "name": p["name"],
@@ -306,6 +345,7 @@ class EcosystemAdapter:
                 "http_status": http_status,
                 "observed_at": datetime.now(UTC).isoformat(),
                 "capabilities": p["capabilities"],
+                "circuit": breaker.snapshot(),
             }
 
         async with httpx.AsyncClient(timeout=2.0) as client:

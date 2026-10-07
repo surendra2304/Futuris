@@ -1,5 +1,5 @@
-from datetime import UTC, datetime
 import json
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -33,11 +33,14 @@ async def test_futuris_memora_write_uses_named_key_and_requires_created_receipt(
             self.client = original(transport=httpx.MockTransport(handler))
             await self.client.__aenter__()
             return self.client
+
         async def __aexit__(self, *args):
             return await self.client.__aexit__(*args)
 
     monkeypatch.setattr("futuris.ecosystem.adapters.httpx.AsyncClient", lambda **_kwargs: Client())
-    candidate = MemoraMemoryCandidate("c-1", "market:BTC", "forecast evidence", {}, datetime.now(UTC))
+    candidate = MemoraMemoryCandidate(
+        "c-1", "market:BTC", "forecast evidence", {}, datetime.now(UTC)
+    )
     assert await EcosystemAdapter().publish_memora_candidate(candidate) is True
     assert captured["url"] == "https://memora.invalid/v1/memories"
     assert captured["authorization"] == "Bearer futuris-agent-key"
@@ -47,5 +50,7 @@ async def test_futuris_memora_write_uses_named_key_and_requires_created_receipt(
 @pytest.mark.asyncio
 async def test_futuris_missing_named_memora_key_fails_closed(monkeypatch):
     monkeypatch.setattr("futuris.ecosystem.adapters.settings.MEMORA_API_KEY", None)
-    candidate = MemoraMemoryCandidate("c-2", "market:BTC", "forecast evidence", {}, datetime.now(UTC))
+    candidate = MemoraMemoryCandidate(
+        "c-2", "market:BTC", "forecast evidence", {}, datetime.now(UTC)
+    )
     assert await EcosystemAdapter().publish_memora_candidate(candidate) is False

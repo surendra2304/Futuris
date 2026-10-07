@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from math import isfinite
-from typing import Any, Iterable
+from typing import Any
 from uuid import uuid4
 
 from .models import ForecastEnvelope
@@ -71,13 +72,14 @@ class ForecastQualityGate:
                 probability=getattr(forecast, "probability", None),
                 confidence=conf_num,
                 model_version=getattr(forecast, "model_version", "m1"),
-                evidence_ids=[str(getattr(e, "evidence_id", e)) for e in getattr(forecast, "evidence", [])],
+                evidence_ids=[
+                    str(getattr(e, "evidence_id", e)) for e in getattr(forecast, "evidence", [])
+                ],
             )
         else:
             env = forecast
         rep = gate.evaluate(env)
         return rep.passed, [i.message for i in rep.errors]
-
 
 
 def coverage_score(required: Iterable[str], observed: Iterable[str]) -> float:

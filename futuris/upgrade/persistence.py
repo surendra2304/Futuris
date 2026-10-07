@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 
 class DurableStateStore:
@@ -56,7 +57,14 @@ class DurableStateStore:
             conn.close()
 
     def upsert_job(
-        self, job_id: str, tenant_id: str, principal_id: str, state: str, version: int, payload: dict[str, Any], updated_at: str
+        self,
+        job_id: str,
+        tenant_id: str,
+        principal_id: str,
+        state: str,
+        version: int,
+        payload: dict[str, Any],
+        updated_at: str,
     ) -> bool:
         with self._lock, self._connect() as conn:
             cur = conn.execute(
@@ -79,10 +87,13 @@ class DurableStateStore:
             row = conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
             return dict(row) if row else None
 
-    def append_outbox(self, event_id: str, tenant_id: str, event_type: str, payload: dict[str, Any]) -> bool:
+    def append_outbox(
+        self, event_id: str, tenant_id: str, event_type: str, payload: dict[str, Any]
+    ) -> bool:
         with self._lock, self._connect() as conn:
             cur = conn.execute(
-                "INSERT OR IGNORE INTO outbox(event_id,tenant_id,event_type,payload) VALUES(?,?,?,?)",
+                "INSERT OR IGNORE INTO outbox(event_id,tenant_id,event_type,payload) "
+                    "VALUES(?,?,?,?)",
                 (event_id, tenant_id, event_type, json.dumps(payload)),
             )
             return cur.rowcount == 1
@@ -99,7 +110,8 @@ class DurableStateStore:
     def mark_outbox_delivered(self, event_id: str) -> bool:
         with self._lock, self._connect() as conn:
             cur = conn.execute(
-                "UPDATE outbox SET delivered_at=datetime('now') WHERE event_id=? AND delivered_at IS NULL",
+                "UPDATE outbox SET delivered_at=datetime('now') WHERE event_id=? AND delivered_at "
+                    "IS NULL",
                 (event_id,),
             )
             return cur.rowcount == 1

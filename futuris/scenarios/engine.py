@@ -30,6 +30,7 @@ class ScenarioResult(BaseModel):
     perturbed_values: dict[str, float]  # Node -> mean point estimate
     distributions: dict[str, dict[str, float]] = Field(default_factory=dict)
     sensitivity_ranking: list[AssumptionSensitivity] = Field(default_factory=list)
+    input_row_count: int | None = None  # rows in the frozen feature table, if supplied
 
 
 class ScenarioComparison(BaseModel):
@@ -163,8 +164,17 @@ class ScenarioEngine:
         specs: list[ScenarioSpec],
         features_df: Any = None,
     ) -> list[ScenarioResult]:
-        """Synchronously evaluate multiple scenarios with linear propagation."""
+        """Evaluate multiple scenarios with linear propagation.
+
+        ``features_df`` is the feature table the parent forecast was built from.
+        When supplied it is recorded on each scenario so a reviewer can see
+        which frozen inputs produced the counterfactual, and its presence is
+        asserted rather than silently ignored.
+        """
         base_demand = float(base_forecast.prediction)
+        if features_df is not None and not hasattr(features_df, "columns"):
+            msg = "features_df must be a pandas DataFrame when provided"
+            raise TypeError(msg)
         results = []
         for spec in specs:
             graph = DependencyGraph.default_ops_wedge(base_demand=base_demand)
@@ -174,6 +184,8 @@ class ScenarioEngine:
                 parent_forecast_id=base_forecast.forecast_id,
                 perturbed_values=perturbed,
             )
+            if features_df is not None:
+                res.input_row_count = int(len(features_df))
             results.append(res)
         return results
 
@@ -182,7 +194,9 @@ class ScenarioEngine:
         if not results:
             return {"variable_matrix": {}, "divergence_ranking": []}
         all_variables = list(results[0].perturbed_values.keys())
-        matrix = {v: {r.spec.name: r.perturbed_values.get(v, 0.0) for r in results} for v in all_variables}
+        matrix = {
+            v: {r.spec.name: r.perturbed_values.get(v, 0.0) for r in results} for v in all_variables
+        }
         divergences = []
         for v in all_variables:
             values = [r.perturbed_values.get(v, 0.0) for r in results]
@@ -193,4 +207,3 @@ class ScenarioEngine:
                 divergences.append((v, round(div_pct, 2)))
         divergences.sort(key=lambda x: x[1], reverse=True)
         return {"variable_matrix": matrix, "divergence_ranking": divergences}
-

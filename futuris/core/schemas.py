@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from futuris.core.enums import (
     ConfidenceLevel,
+    EvidenceClass,
     ForecastEventType,
     ForecastStatus,
     ResolutionMethod,
@@ -15,6 +16,7 @@ from futuris.core.enums import (
     SignalClass,
     SourceTrust,
 )
+from futuris.core.hashing import is_real_hash
 
 
 class EvidenceRef(BaseModel):
@@ -50,6 +52,25 @@ class EvidenceRef(BaseModel):
         ...,
         description="SHA-256 hash verifying integrity of the snapshot data.",
     )
+    evidence_class: EvidenceClass = Field(
+        default=EvidenceClass.SYNTHETIC,
+        description=(
+            "Provenance of the snapshot content: live (measured here), derived, "
+            "synthetic, or demo. Defaults to synthetic so unlabelled evidence can "
+            "never be presented as measured."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_live_evidence_is_hashed(self) -> "EvidenceRef":
+        """Evidence claiming live provenance must carry a real content hash."""
+        if self.evidence_class == EvidenceClass.LIVE and not is_real_hash(self.content_hash):
+            msg = (
+                "evidence_class='live' requires a real SHA-256 content hash; "
+                f"got {self.content_hash!r}"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class Driver(BaseModel):
@@ -161,19 +182,25 @@ class Forecast(BaseModel):
     )
     predictive_distribution: dict[str, float] = Field(
         default_factory=dict,
-        description="Predictive probability distribution percentiles (e.g. p10, p50, p90, exceedance).",
+        description="Predictive probability distribution percentiles (e.g. p10, p50, p90, "
+            "exceedance).",
     )
     intervals: list[dict[str, float]] = Field(
         default_factory=list,
         description="Step-by-step predictive uncertainty intervals.",
     )
-    calibration_metrics: dict[str, float] = Field(
+    calibration_metrics: dict[str, float | int | bool | str] = Field(
         default_factory=dict,
-        description="Calibration quality metrics (ECE, Brier score, empirical coverage).",
+        description=(
+            "Calibration quality metrics measured from resolved outcomes "
+            "(ECE, Brier score, empirical coverage). Only numbers that were "
+            "actually computed may appear here."
+        ),
     )
     model_metadata: dict[str, Any] = Field(
         default_factory=dict,
-        description="Underlying model architecture, family, configuration hash, and hyperparameters.",
+        description="Underlying model architecture, family, configuration hash, and "
+            "hyperparameters.",
     )
     prediction_is_not_authorization: bool = Field(
         default=True,
@@ -186,6 +213,18 @@ class Forecast(BaseModel):
     idempotency_key: str | None = Field(
         default=None,
         description="Optional idempotency deduplication key.",
+    )
+    evidence_class: EvidenceClass = Field(
+        default=EvidenceClass.SYNTHETIC,
+        description=(
+            "Provenance of the served numbers, surfaced to every client. "
+            "Defaults to synthetic: a forecast that has not labelled its data "
+            "source is never presented as measured."
+        ),
+    )
+    evidence_source: str | None = Field(
+        default=None,
+        description="Human-readable origin of the numbers (e.g. telemetry table, caller context).",
     )
 
     @field_validator("probability")
@@ -211,7 +250,10 @@ class Forecast(BaseModel):
     def validate_executable_commands_empty(cls, v: list[str]) -> list[str]:
         """Enforce that forecasts never return executable system commands."""
         if v:
-            raise ValueError("Invariant violation: executable commands are strictly forbidden in forecast responses.")
+            raise ValueError(
+                "Invariant violation: executable commands are strictly forbidden in forecast "
+                    "responses."
+            )
         return v
 
     @field_validator("prediction_is_not_authorization")
@@ -219,7 +261,9 @@ class Forecast(BaseModel):
     def validate_prediction_is_not_authorization(cls, v: bool) -> bool:
         """Enforce that prediction_is_not_authorization invariant remains True."""
         if not v:
-            raise ValueError("Invariant violation: prediction_is_not_authorization must always be True.")
+            raise ValueError(
+                "Invariant violation: prediction_is_not_authorization must always be True."
+            )
         return True
 
     @model_validator(mode="after")

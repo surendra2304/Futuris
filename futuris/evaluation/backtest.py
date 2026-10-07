@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 class DataLeakageError(RuntimeError):
     """Raised when backtest feature extraction or training data contains future observations."""
+
     pass
 
 
@@ -35,6 +36,7 @@ def validate_backtest_leakage(
 ) -> None:
     """Ensure training data and features contain zero future observations beyond as_of."""
     import pandas as pd
+
     as_of_utc = as_of.replace(tzinfo=UTC) if as_of.tzinfo is None else as_of.astimezone(UTC)
     if isinstance(data, pd.DataFrame):
         if isinstance(data.index, pd.DatetimeIndex):
@@ -42,7 +44,8 @@ def validate_backtest_leakage(
             if len(future_idx) > 0:
                 max_future = future_idx.max()
                 raise DataLeakageError(
-                    f"Backtest temporal leakage detected: {len(future_idx)} points exceed as_of ({as_of_utc}), "
+                    "Backtest temporal leakage detected: {len(future_idx)} points exceed as_of "
+                        "({as_of_utc}), "
                     f"max future timestamp is {max_future}"
                 )
         for col in ["timestamp", "observed_at", "as_of"]:
@@ -51,7 +54,8 @@ def validate_backtest_leakage(
                 future_rows = ts_col[ts_col > as_of_utc]
                 if len(future_rows) > 0:
                     raise DataLeakageError(
-                        f"Backtest temporal leakage detected in column '{col}': {len(future_rows)} points exceed as_of ({as_of_utc})"
+                        "Backtest temporal leakage detected in column '{col}': {len(future_rows)} "
+                            "points exceed as_of ({as_of_utc})"
                     )
     elif isinstance(data, list):
         for item in data:
@@ -69,10 +73,15 @@ def validate_backtest_leakage(
             if ts:
                 if isinstance(ts, str):
                     ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                ts_utc = ts.replace(tzinfo=UTC) if getattr(ts, "tzinfo", None) is None else ts.astimezone(UTC)
+                ts_utc = (
+                    ts.replace(tzinfo=UTC)
+                    if getattr(ts, "tzinfo", None) is None
+                    else ts.astimezone(UTC)
+                )
                 if ts_utc > as_of_utc:
                     raise DataLeakageError(
-                        f"Backtest temporal leakage detected: observation timestamp {ts_utc} exceeds as_of {as_of_utc}"
+                        "Backtest temporal leakage detected: observation timestamp {ts_utc} "
+                            "exceeds as_of {as_of_utc}"
                     )
     return True
 
@@ -171,9 +180,7 @@ class BacktestEngine:
                 if actual_val is None:
                     actual_val = f.prediction
 
-                window_keys = [
-                    t for t in obs_map if f.as_of < t <= target_expiry
-                ]
+                window_keys = [t for t in obs_map if f.as_of < t <= target_expiry]
                 window_max = max([obs_map[k] for k in window_keys]) if window_keys else actual_val
                 event_occurred = window_max >= capacity_threshold
 
@@ -238,7 +245,7 @@ class BacktestEngine:
         summary = (
             f"Backtest for {target} ({start_date.date()} to {end_date.date()}): "
             f"{len(forecasts)} forecasts. MAE: {global_mae:.2f}, RMSE: {global_rmse:.2f}, "
-            f"Coverage: {global_cov*100:.1f}%, ECE: {global_ece:.4f}"
+            f"Coverage: {global_cov * 100:.1f}%, ECE: {global_ece:.4f}"
         )
 
         return BacktestReport(

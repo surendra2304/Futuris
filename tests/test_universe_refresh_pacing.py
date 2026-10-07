@@ -17,7 +17,6 @@ Two defects found by exercising the entry points rather than reading them:
 """
 
 import asyncio
-import time
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -30,6 +29,7 @@ from futuris.api.routers.predictions import (
 from futuris.core.enums import ConfidenceLevel, ForecastStatus
 from futuris.core.schemas import Forecast
 from futuris.core.universe_domains import UNIVERSE_TARGETS
+from futuris.infra.auth import AuthUser
 
 
 def _forecast(target: str, as_of: datetime) -> Forecast:
@@ -70,7 +70,9 @@ async def test_one_request_spends_one_budget(monkeypatch):
 
     monkeypatch.setattr(predictions, "ForecastRepository", _EmptyRepo)
 
-    async def slow_generate(target, context=None, session=None, skip_intelx=False):
+    async def slow_generate(
+        target, context=None, session=None, skip_intelx=False, model_budget_seconds=None
+    ):
         await asyncio.sleep(per_target)
         return _forecast(target, datetime.now(UTC))
 
@@ -85,7 +87,11 @@ async def test_one_request_spends_one_budget(monkeypatch):
 
     monkeypatch.setattr(predictions, "build_universe_matrix", spy)
 
-    response = await refresh_universe_predictions(background_tasks=None, session=object())
+    response = await refresh_universe_predictions(
+        background_tasks=None,
+        user=AuthUser(label="test", role="analyst"),
+        session=object(),
+    )
 
     assert response.total_active_targets == len(UNIVERSE_TARGETS)
     assert seen, "the matrix assembly was never called"

@@ -1,4 +1,5 @@
 """Consume Memora events into a durable, advisory Futuris inbox."""
+
 from __future__ import annotations
 
 import asyncio
@@ -59,9 +60,7 @@ async def consume_memora_events_once(client=memora_client) -> int:
                     await session.commit()
         # Other event types are deliberately ignored by this consumer, but must
         # still be acknowledged in order to avoid blocking later IntelX notices.
-        ack = await asyncio.to_thread(
-            client.acknowledge_event, "futuris", event_id, CONSUMER_ID
-        )
+        ack = await asyncio.to_thread(client.acknowledge_event, "futuris", event_id, CONSUMER_ID)
         if not _result_ok(ack):
             raise RuntimeError(f"Memora did not acknowledge event {event_id}")
         handled += 1
@@ -128,9 +127,7 @@ async def _persist_notice_to_memora(event: dict[str, Any], payload: dict[str, An
         values = payload.get(field)
         if isinstance(values, list):
             evidence[field] = [
-                item.strip()[:100]
-                for item in values[:50]
-                if isinstance(item, str) and item.strip()
+                item.strip()[:100] for item in values[:50] if isinstance(item, str) and item.strip()
             ]
     for field, lower, upper in (
         ("sentiment_score", -1.0, 1.0),

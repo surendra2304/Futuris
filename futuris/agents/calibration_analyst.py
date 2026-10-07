@@ -51,7 +51,7 @@ class CalibrationAnalyst:
 
         narrative = (
             f"Calibration Briefing for {report.target}: Evaluated {report.total_forecasts} "
-            f"runs. MAE={mae_val:.2f}, Coverage={cov_val*100:.1f}%, ECE={ece_val:.4f}. "
+            f"runs. MAE={mae_val:.2f}, Coverage={cov_val * 100:.1f}%, ECE={ece_val:.4f}. "
             f"Primary recommendation: {recommended_actions[0]}."
         )
 

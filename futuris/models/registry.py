@@ -44,6 +44,10 @@ class ModelRegistry:
         cfg_hash = adapter.get_config_hash()
         return f"{name}@v1:{cfg_hash}"
 
+    def list_models(self) -> list[str]:
+        """Return every registered adapter name in deterministic order."""
+        return sorted(self._adapters)
+
     def current_active(self) -> list[str]:
         """Return default active adapter names in prioritized order."""
         return ["mean_ensemble", "auto_ets", "seasonal_naive", "drift", "naive"]

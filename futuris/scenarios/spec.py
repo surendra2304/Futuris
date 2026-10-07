@@ -52,7 +52,7 @@ class ScenarioSpec(BaseModel):
             scenario_type=ScenarioType.UPSIDE,
             name=name,
             assumption_overrides=overrides,
-            rationale=f"Upside demand expansion (+{(demand_multiplier - 1.0)*100:.1f}%).",
+            rationale=f"Upside demand expansion (+{(demand_multiplier - 1.0) * 100:.1f}%).",
         )
 
     @classmethod
@@ -70,7 +70,7 @@ class ScenarioSpec(BaseModel):
             scenario_type=ScenarioType.DOWNSIDE,
             name=name,
             assumption_overrides=overrides,
-            rationale=f"Downside contraction ({(demand_multiplier - 1.0)*100:.1f}%).",
+            rationale=f"Downside contraction ({(demand_multiplier - 1.0) * 100:.1f}%).",
         )
 
     @classmethod
@@ -90,8 +90,8 @@ class ScenarioSpec(BaseModel):
             },
             rationale=(
                 f"Severe operational stress test: demand "
-                f"+{(demand_multiplier - 1.0)*100:.0f}%, capacity "
-                f"{(capacity_multiplier - 1.0)*100:.0f}%."
+                f"+{(demand_multiplier - 1.0) * 100:.0f}%, capacity "
+                f"{(capacity_multiplier - 1.0) * 100:.0f}%."
             ),
         )
 

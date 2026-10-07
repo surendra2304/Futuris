@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
 try:
     from statsforecast.models import AutoARIMA as _SF_AutoARIMA
     from statsforecast.models import AutoETS as _SF_AutoETS
@@ -12,19 +13,25 @@ try:
     from statsforecast.models import RandomWalkWithDrift as _SF_RandomWalkWithDrift
     from statsforecast.models import SeasonalNaive as _SF_SeasonalNaive
 except (ImportError, OSError):
-    class _SF_MockModel:  # Fallback for restricted OS environments
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
+
+    class _SFMockModel:  # Fallback for restricted OS environments
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
             self.last_val = 100.0
-        def fit(self, y: Any = None, *args: Any, **kwargs: Any) -> Any:
+
+        def fit(self, y: Any = None, *_args: Any, **_kwargs: Any) -> Any:
             try:
                 if y is not None and hasattr(y, "__len__") and len(y) > 0:
                     self.last_val = float(y[-1])
             except Exception:
                 pass
             return self
-        def predict(self, h: int = 1, *args: Any, **kwargs: Any) -> Any:
+
+        def predict(self, h: int = 1, *_args: Any, **_kwargs: Any) -> Any:
             return {"mean": np.full(h, self.last_val)}
-    _SF_AutoARIMA = _SF_AutoETS = _SF_Naive = _SF_RandomWalkWithDrift = _SF_SeasonalNaive = _SF_MockModel
+
+    _SF_AutoARIMA = _SF_AutoETS = _SF_Naive = _SF_RandomWalkWithDrift = _SF_SeasonalNaive = (
+        _SFMockModel
+    )
 
 from futuris.models.base import (
     ModelPrediction,
@@ -210,7 +217,7 @@ class AutoETSAdapter(BaseStatsForecastAdapter):
         _ = x
         self.as_of = as_of
         self.y_history = y.to_numpy(dtype=float)
-        # Cap eff_season to 24 for ETS to ensure numerical stability and prevent state space explosion
+        # Cap eff_season at 24 for ETS numerical stability
         base_season = min(self.season_length, 24)
         eff_season = base_season if len(self.y_history) >= 2 * base_season else 1
         self.fitted_model = _SF_AutoETS(season_length=eff_season).fit(y=self.y_history)

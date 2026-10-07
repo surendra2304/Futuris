@@ -1,7 +1,6 @@
-﻿import sys
+import sys
 from pathlib import Path
 from unittest.mock import patch
-import requests
 
 # Add Stratex to sys.path
 stratex_path = Path("..") / "Stratex"
@@ -14,14 +13,17 @@ print("TESTING STRATEX REAL FuturisMarketClient AGAINST FUTURIS API")
 print("=" * 70)
 
 from fastapi.testclient import TestClient
+
 from futuris.api.app import app
 
 test_client = TestClient(app)
+
 
 def mock_post(url, **kwargs):
     # Route through fastapi TestClient
     path = url.replace("https://futuris-th6f.onrender.com", "")
     return test_client.post(path, **kwargs)
+
 
 with patch("requests.post", side_effect=mock_post):
     client = FuturisMarketClient()

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Callable, Iterable
-
-from .models import ForecastEnvelope
 
 
 class DataLeakageError(RuntimeError):
@@ -26,7 +24,9 @@ def validate_point_in_time(
     for ts in timestamps:
         current = normalize_as_of(ts)
         if current > cutoff or (not allow_equal and current == cutoff):
-            raise DataLeakageError(f"future observation found: {current.isoformat()} > as_of {cutoff.isoformat()}")
+            raise DataLeakageError(
+                f"future observation found: {current.isoformat()} > as_of {cutoff.isoformat()}"
+            )
 
 
 def compute_horizon_steps(horizon: timedelta, step_minutes: int) -> int:

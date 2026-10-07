@@ -6,18 +6,12 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from futuris.api.deps import get_db_session, get_forecast_repo
-from futuris.core.enums import ForecastStatus
+from futuris.api.deps import get_db_session
+from futuris.core.enums import EvidenceClass, ForecastStatus
 from futuris.core.schemas import Forecast
-from futuris.core.universe_forecasting import (
-    REFRESH_BUDGET_SECONDS,
-    generate_universe_forecast,
-    refresh_all_within_budget,
-    refresh_missing_within_budget,
-)
 from futuris.core.universe_domains import (
     UNIVERSE_TARGETS,
     RiskLevel,
@@ -25,9 +19,16 @@ from futuris.core.universe_domains import (
     evaluate_risk_level,
     get_target_spec,
 )
+from futuris.core.universe_forecasting import (
+    REFRESH_BUDGET_SECONDS,
+    generate_universe_forecast,
+    refresh_all_within_budget,
+    refresh_missing_within_budget,
+)
+from futuris.infra.audit import AuditLogger
+from futuris.infra.auth import AllowAnonymousRead, RequireAnalyst
 from futuris.infra.logging import get_logger
 from futuris.storage.repositories import ForecastRepository
-
 
 logger = get_logger("futuris.api.predictions")
 
@@ -53,6 +54,53 @@ class UniversePredictionRequest(BaseModel):
         description="Dynamic contextual telemetry supplied by the requesting agent.",
     )
 
+    @field_validator("target")
+    @classmethod
+    def _validate_target(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("target must not be empty")
+        if len(cleaned) > 200:
+            raise ValueError("target must be at most 200 characters")
+        return cleaned
+
+    @field_validator("horizon")
+    @classmethod
+    def _validate_horizon(cls, value: str) -> str:
+        from futuris.api.routers.forecasts import parse_horizon
+
+        parse_horizon(value)
+        return value
+
+    @field_validator("context")
+    @classmethod
+    def _validate_context(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Reject non-numeric caller estimates here, as a 422.
+
+        The forecasting path coerces these to float; a string such as
+        ``point_estimate: "not-a-number"`` used to reach ``float()`` and return
+        a 500 from deep inside the pipeline.
+        """
+        numeric_keys = ("point_estimate", "current_value", "probability")
+        cleaned: dict[str, Any] = dict(value)
+        for key in numeric_keys:
+            raw = cleaned.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+                raise ValueError(f"context.{key} must be a number")
+            try:
+                cleaned[key] = float(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"context.{key} must be a number, got {raw!r}") from exc
+            if key == "probability" and not 0.0 <= cleaned[key] <= 1.0:
+                raise ValueError(
+                    f"context.probability must be between 0.0 and 1.0, got {cleaned[key]}"
+                )
+            if cleaned[key] != cleaned[key] or cleaned[key] in (float("inf"), float("-inf")):
+                raise ValueError(f"context.{key} must be a finite number")
+        return cleaned
+
 
 class UniversePredictionResponse(BaseModel):
     forecast_id: UUID
@@ -73,6 +121,9 @@ class UniversePredictionResponse(BaseModel):
     as_of: datetime
     expires_at: datetime
     intelx_context_included: bool
+    status: ForecastStatus
+    evidence_class: EvidenceClass
+    evidence_source: str | None = None
 
 
 class TargetPostureItem(BaseModel):
@@ -89,6 +140,9 @@ class TargetPostureItem(BaseModel):
     mitigation_action: str
     interpretation: str
     last_updated: datetime
+    status: ForecastStatus
+    evidence_class: EvidenceClass
+    evidence_source: str | None = None
 
 
 class DomainPostureSummary(BaseModel):
@@ -116,11 +170,25 @@ class UniverseMatrixResponse(BaseModel):
 )
 async def request_universe_prediction(
     req: UniversePredictionRequest,
+    user: RequireAnalyst,
     session: AsyncSession = Depends(get_db_session),
 ) -> UniversePredictionResponse:
     """Universal predictive intelligence endpoint for all 9 FRIDAY Universe subsystems."""
     spec = get_target_spec(req.target)
     fc = await generate_universe_forecast(req.target, context=req.context, session=session)
+
+    await AuditLogger(session).log_mutation(
+        actor_label=user.label,
+        action="request_universe_prediction",
+        entity="forecast",
+        entity_id=str(fc.forecast_id),
+        payload={
+            "target": req.target,
+            "evidence_class": fc.evidence_class.value,
+            "evidence_source": fc.evidence_source,
+            "status": fc.status.value,
+        },
+    )
 
     risk = evaluate_risk_level(spec, fc.prediction, fc.probability)
     interp = spec.interpretation_template.format(
@@ -150,6 +218,9 @@ async def request_universe_prediction(
         as_of=fc.as_of,
         expires_at=fc.expires_at,
         intelx_context_included=intelx_included,
+        status=fc.status,
+        evidence_class=fc.evidence_class,
+        evidence_source=fc.evidence_source,
     )
 
 
@@ -159,9 +230,11 @@ async def request_universe_prediction(
     summary="Get Complete FRIDAY Universe Predictive Risk Matrix",
 )
 async def get_universe_matrix(
+    user: AllowAnonymousRead,
     session: AsyncSession = Depends(get_db_session),
 ) -> UniverseMatrixResponse:
-    """Aggregates real-time risk posture and latest forecasts across all 9 FRIDAY Universe pillars."""
+    """Aggregate risk posture and latest forecasts across the 9 FRIDAY Universe pillars."""
+    _ = user
     return await build_universe_matrix(session)
 
 
@@ -232,6 +305,9 @@ async def build_universe_matrix(
                 mitigation_action=spec.mitigation_action,
                 interpretation=interp,
                 last_updated=fc.as_of,
+                status=fc.status,
+                evidence_class=fc.evidence_class,
+                evidence_source=fc.evidence_source,
             )
         )
 
@@ -281,7 +357,9 @@ async def build_universe_matrix(
     high_count = sum(1 for r in all_risks if r == RiskLevel.HIGH)
     elevated_count = sum(1 for r in all_risks if r == RiskLevel.ELEVATED)
 
-    health_score = max(0.0, 100.0 - (critical_count * 25.0 + high_count * 10.0 + elevated_count * 3.0))
+    health_score = max(
+        0.0, 100.0 - (critical_count * 25.0 + high_count * 10.0 + elevated_count * 3.0)
+    )
 
     return UniverseMatrixResponse(
         ecosystem_health_score=round(health_score, 1),
@@ -300,9 +378,12 @@ async def build_universe_matrix(
 )
 async def refresh_universe_predictions(
     background_tasks: BackgroundTasks,
+    user: RequireAnalyst,
     session: AsyncSession = Depends(get_db_session),
 ) -> UniverseMatrixResponse:
-    """Trigger recalculation across all 9 FRIDAY Universe pillars with fresh telemetry and IntelX context."""
+    """Recalculate every FRIDAY Universe pillar with fresh telemetry and context."""
+    _ = background_tasks
+    _ = user
     logger.info("refreshing_all_universe_predictions_started")
     started = time.monotonic()
     await refresh_all_within_budget(session)

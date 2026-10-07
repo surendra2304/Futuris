@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
 
 from .models import AuditEvent
 
-
 SENSITIVE_KEYS = {
-    "authorization", "api_key", "apikey", "token", "secret",
-    "password", "cookie", "credential", "inference_api_key",
+    "authorization",
+    "api_key",
+    "apikey",
+    "token",
+    "secret",
+    "password",
+    "cookie",
+    "credential",
+    "inference_api_key",
 }
 
 
@@ -57,7 +62,14 @@ class AuditLog:
             return list(reversed(rows[-limit:]))
 
     async def record(
-        self, tenant_id: str, principal_id: str, action: str, resource: str, outcome: str, reason: str = "", **metadata: Any
+        self,
+        tenant_id: str,
+        principal_id: str,
+        action: str,
+        resource: str,
+        outcome: str,
+        reason: str = "",
+        **metadata: Any,
     ) -> AuditEvent:
         return await self.append(
             AuditEvent(

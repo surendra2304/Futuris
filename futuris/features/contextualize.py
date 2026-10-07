@@ -12,8 +12,8 @@ class SimpleHolidayCalendar:
     """Built-in deterministic holiday and high-load event calendar (no external APIs)."""
 
     HOLIDAYS_MMDD = {
-        (1, 1),    # New Year's Day
-        (7, 4),    # Independence Day
+        (1, 1),  # New Year's Day
+        (7, 4),  # Independence Day
         (11, 27),  # Thanksgiving (approx)
         (11, 28),  # Black Friday (approx)
         (12, 25),  # Christmas

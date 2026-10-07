@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 from uuid import uuid4
 
 from .models import ActionRisk, DecisionRecord, ForecastEnvelope
@@ -74,12 +74,15 @@ class DecisionEngine:
         class _AdvisoryResult:
             def __init__(self, actions: list[DecisionRecord]) -> None:
                 self.actions = actions
+                self.impact_severity = "high"
+
                 class _Class:
                     value = "advisory"
+
                 self.decision_class = _Class()
                 self.requires_human_authorization = True
                 self.authorization_granted = False
-        
+
         env = ForecastEnvelope(
             forecast_id=getattr(forecast, "forecast_id", uuid4()),
             target=getattr(forecast, "target", ""),
@@ -87,14 +90,20 @@ class DecisionEngine:
             lower=getattr(forecast, "range_lower", 0.0),
             upper=getattr(forecast, "range_upper", 0.0),
             probability=getattr(forecast, "probability", 0.0),
-            confidence=0.85 if getattr(getattr(forecast, "confidence", None), "value", "") == "high" else 0.65,
+            confidence=0.85
+            if getattr(getattr(forecast, "confidence", None), "value", "") == "high"
+            else 0.65,
             model_version=getattr(forecast, "model_version", "m1"),
-            evidence_ids=[str(getattr(e, "evidence_id", e)) for e in getattr(forecast, "evidence", [])],
+            evidence_ids=[
+                str(getattr(e, "evidence_id", e)) for e in getattr(forecast, "evidence", [])
+            ],
         )
         decisions = self.recommend(env)
-        return _AdvisoryResult(decisions)
+        # Severity is recorded on the advisory record rather than discarded:
+        # consumers use it to decide how urgently a human must look.
+        result = _AdvisoryResult(decisions)
+        result.impact_severity = impact_severity
+        return result
 
 
 AdvisoryDecisionEngine = DecisionEngine
-
-

@@ -1,4 +1,5 @@
 import unittest
+
 from futuris.upgrade.models import JobState
 from futuris.upgrade.state import InvalidTransition, StateMachine
 

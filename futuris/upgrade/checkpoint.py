@@ -38,7 +38,8 @@ class CheckpointManager:
     def _checksum(job_id: str, version: int, state: str, payload: dict[str, Any]) -> str:
         canonical = json.dumps(
             {"job_id": job_id, "version": version, "state": state, "payload": payload},
-            sort_keys=True, separators=(",", ":"),
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode()
         return hashlib.sha256(canonical).hexdigest()
 

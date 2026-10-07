@@ -1,5 +1,6 @@
 """Comprehensive integration tests for storage repositories and point-in-time state."""
 
+import asyncio
 import os
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -129,6 +130,12 @@ async def test_forecast_point_in_time_query_correctness(
     # 1. Create original forecast
     await repo.create(sample_forecast)
 
+    # A timestamp strictly between creation and invalidation must show the
+    # forecast as it then stood.
+    await asyncio.sleep(0.02)
+    t_between = datetime.now(UTC)
+    await asyncio.sleep(0.02)
+
     # 2. Update status at a later time
     await repo.update_status(sample_forecast.forecast_id, ForecastStatus.INVALIDATED)
 
@@ -137,13 +144,19 @@ async def test_forecast_point_in_time_query_correctness(
     assert current is not None
     assert current.status == ForecastStatus.INVALIDATED
 
-    # 4. Query point-in-time query at future time (reconstructs original creation state from events)
+    # 4. Querying after the invalidation reconstructs the invalidated status,
+    #    not the creation snapshot: the append-only log is replayed.
     historical = await repo.point_in_time_query(
         sample_forecast.target, query_time=datetime.now(UTC) + timedelta(minutes=5)
     )
     assert historical is not None
     assert historical.forecast_id == sample_forecast.forecast_id
-    assert historical.status == ForecastStatus.ACTIVE
+    assert historical.status == ForecastStatus.INVALIDATED
+
+    # 5. Querying before it reconstructs the original active forecast.
+    before = await repo.point_in_time_query(sample_forecast.target, query_time=t_between)
+    assert before is not None
+    assert before.status == ForecastStatus.ACTIVE
 
 
 @pytest.mark.asyncio

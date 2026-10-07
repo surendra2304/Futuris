@@ -1,6 +1,5 @@
 """Application configuration using Pydantic Settings."""
 
-import os
 from typing import Literal
 
 from pydantic import AliasChoices, Field
@@ -17,8 +16,28 @@ class Settings(BaseSettings):
     )
 
     APP_ENV: str = Field(
-        default="production",
-        description="Application running environment mode.",
+        default="dev",
+        description=(
+            "Application running environment mode. Defaults to dev so a fresh "
+            "checkout never claims production; production must be set explicitly "
+            "and then has to carry real credentials (see production_env_guard)."
+        ),
+    )
+    SELF_HEALING_ENABLED: bool = Field(
+        default=True,
+        description="Run the periodic self-assessment and self-healing supervisor.",
+    )
+    SELF_HEALING_INTERVAL_SECONDS: float = Field(
+        default=60.0,
+        description="Seconds between self-assessment passes.",
+    )
+    SCHEDULER_ENABLED: bool = Field(
+        default=True,
+        description="Run the unattended ingestion/refresh/lifecycle scheduler in-process.",
+    )
+    ALLOW_DEMO_CREDENTIALS: bool = Field(
+        default=False,
+        description="Permit demo credentials (never allowed in production)",
     )
     STARTUP_DEMO_SEED_ENABLED: bool = Field(
         default=False,
@@ -69,7 +88,9 @@ class Settings(BaseSettings):
     )
     MEMORA_API_KEY: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("FUTURIS_MEMORA_API_KEY", "FUTURIS_API_KEY", "MEMORA_API_KEY"),
+        validation_alias=AliasChoices(
+            "FUTURIS_MEMORA_API_KEY", "FUTURIS_API_KEY", "MEMORA_API_KEY"
+        ),
         description="Live Memora Cloud Memory API Key",
     )
     STRATEX_URL: str = Field(
@@ -111,7 +132,9 @@ class Settings(BaseSettings):
 
     def validate_production_safety(self) -> None:
         """Enforce safe_config checks if running under production environment."""
-        from futuris.upgrade.safe_config import production_env_guard
+        from futuris.upgrade.safe_config import (
+            production_env_guard,
+        )
 
         values = {
             "FUTURIS_API_KEY": self.FUTURIS_API_KEY,
@@ -123,7 +146,27 @@ class Settings(BaseSettings):
         }
         production_env_guard(self.APP_ENV, values)
 
+    def validate_credential_contract(self) -> None:
+        """Validate the master/service credential contract for production."""
+        from futuris.upgrade.auth import validate_production_credentials
+
+        validate_production_credentials(
+            environment="prod",
+            master_key=self.FUTURIS_API_KEY,
+            service_keys={
+                "FUTURIS_FRIDAY_API_KEY": self.FUTURIS_FRIDAY_API_KEY,
+                "MEMORA_API_KEY": self.MEMORA_API_KEY,
+                "INTELX_API_KEY": self.INTELX_API_KEY,
+            },
+            allow_demo_credentials=self.ALLOW_DEMO_CREDENTIALS,
+        )
+
 
 settings = Settings()
-if settings.APP_ENV in ("prod", "production") and os.getenv("STRICT_PRODUCTION_SECRETS", "false").lower() == "true":
+# Production safety is enforced unconditionally at import: an environment that
+# claims to be production but carries placeholder credentials must not start.
+from futuris.upgrade.safe_config import is_production_environment  # noqa: E402
+
+if is_production_environment(settings.APP_ENV):
     settings.validate_production_safety()
+    settings.validate_credential_contract()

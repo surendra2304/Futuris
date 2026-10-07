@@ -82,13 +82,20 @@ def test_router_heuristics_policy_branches():
         history_points=2500, frequency_minutes=5, has_weekly_seasonality=True
     )
     assert router.select_candidates(meta_rich, horizon_steps=288) == [
-        "mean_ensemble", "auto_ets", "seasonal_naive", "drift", "naive"
+        "mean_ensemble",
+        "auto_ets",
+        "seasonal_naive",
+        "drift",
+        "naive",
     ]
 
     # Moderate history (288 to 2015)
     meta_moderate = SeriesMetadata(history_points=500, frequency_minutes=5)
     assert router.select_candidates(meta_moderate, horizon_steps=24) == [
-        "seasonal_naive", "auto_ets", "drift", "naive"
+        "seasonal_naive",
+        "auto_ets",
+        "drift",
+        "naive",
     ]
 
 

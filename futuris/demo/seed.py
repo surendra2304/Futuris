@@ -73,8 +73,8 @@ class DemoSeeder:
         session.add(active_m)
         await session.flush()
 
-        from futuris.core.universe_forecasting import generate_universe_forecast
         from futuris.core.universe_domains import UNIVERSE_TARGETS
+        from futuris.core.universe_forecasting import generate_universe_forecast
 
         if fast_mode:
             live_forecast = await generate_universe_forecast(
@@ -151,9 +151,7 @@ class DemoSeeder:
             total_bt = bt_report.total_forecasts
 
         # 6. Force Lifecycle Sweep
-        sweep_report = await lifecycle_mgr.run_lifecycle_sweep(
-            observations_df=obs_df, as_of=now
-        )
+        sweep_report = await lifecycle_mgr.run_lifecycle_sweep(observations_df=obs_df, as_of=now)
 
         # 7. Compute Calibration Reliability
         analyzer = CalibrationAnalyzer()
@@ -162,9 +160,7 @@ class DemoSeeder:
             actual_outcomes=[False, False, True, True, True],
         )
 
-        top_div = (
-            comparison.divergence_ranking[0] if comparison.divergence_ranking else None
-        )
+        top_div = comparison.divergence_ranking[0] if comparison.divergence_ranking else None
 
         return {
             "telemetry_points": len(observations),

@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from decimal import Decimal
+
 from futuris.upgrade.budget import BudgetExceeded, BudgetManager
 
 
@@ -18,12 +19,14 @@ class BudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_reservations_do_not_overspend(self):
         mgr = BudgetManager()
         await mgr.configure("t1", "r1", Decimal("10"))
+
         async def reserve():
             try:
                 await mgr.reserve("t1", "r1", Decimal("2"))
                 return True
             except BudgetExceeded:
                 return False
+
         results = await asyncio.gather(*(reserve() for _ in range(10)))
         self.assertEqual(sum(results), 5)
 

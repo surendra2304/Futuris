@@ -117,4 +117,3 @@ class AuditLogger:
             )
             for m in res.scalars().all()
         ]
-

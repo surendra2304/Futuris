@@ -4,14 +4,21 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
+from starlette.exceptions import HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import Scope
+
+if TYPE_CHECKING:
+
+    pass
 
 from futuris import __version__
 from futuris.api.errors import register_error_handlers
@@ -25,41 +32,86 @@ from futuris.api.routers.market import router as market_router
 from futuris.api.routers.models import router as models_router
 from futuris.api.routers.predictions import router as predictions_router
 from futuris.api.routers.scenarios import router as scenarios_router
+from futuris.api.routers.self_status import router as self_status_router
 from futuris.api.routers.webhooks import router as webhooks_router
 from futuris.demo.seed import DemoSeeder
 from futuris.demo.startup_policy import should_seed_demo_on_startup
 from futuris.infra.config import settings
+from futuris.infra.events import event_emitter
 from futuris.infra.logging import configure_logging, get_logger
 from futuris.infra.metrics import metrics_endpoint
-from futuris.storage.db import async_session_factory, engine
-from futuris.storage.models import Base, ForecastModel
+from futuris.storage.db import async_session_factory, ensure_schema
+from futuris.storage.models import ForecastModel
 
 configure_logging()
 logger = get_logger("futuris.api")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     """Initialize storage and background workers without fabricating production telemetry."""
     import sys
 
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("startup_db_tables_verified")
+        report = await ensure_schema()
+        if report["ready"]:
+            logger.info("startup_db_tables_verified", tables=report["present"])
+        else:
+            # Booting with an unusable schema must be loud: requests will be
+            # refused with a storage error until it is fixed.
+            logger.error(
+                "startup_db_schema_incomplete",
+                missing=report["missing"],
+                error=report["error"],
+            )
     except Exception as exc:
-        logger.warning("startup_init_failed", error=str(exc))
+        logger.error("startup_init_failed", error=f"{type(exc).__name__}: {exc}")
+
+    # Outbound webhook deliveries share one pooled HTTP client for the process
+    # lifetime instead of opening a connection per event.
+    if event_emitter._client is None:
+        event_emitter._client = httpx.AsyncClient(
+            timeout=5.0, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
+        )
+
+    # The unattended agent loop must actually run: without it nothing refreshes
+    # forecasts, sweeps lifecycles or backtests unless a human calls the API.
+    scheduler = None
+    scheduler_session = None
+    if "pytest" not in sys.modules and settings.SCHEDULER_ENABLED:
+        from futuris.infra.scheduler import ForecastScheduler
+        from futuris.storage.repositories import (
+            EventRepository,
+            ForecastRepository,
+            OutcomeRepository,
+        )
+
+        scheduler_session = async_session_factory()
+        scheduler = ForecastScheduler(
+            forecast_repo=ForecastRepository(scheduler_session),
+            outcome_repo=OutcomeRepository(scheduler_session),
+            event_repo=EventRepository(scheduler_session),
+            emitter=event_emitter,
+        )
+        scheduler.start()
+        # Published for /v1/self/status: the supervisor reports what is
+        # actually running rather than assuming the scheduler started.
+        _running_scheduler = scheduler
 
     background_tasks: list[asyncio.Task] = []
+    if "pytest" not in sys.modules and settings.SELF_HEALING_ENABLED:
+        from futuris.infra.self_healing import self_healing_loop
+
+        background_tasks.append(
+            asyncio.create_task(self_healing_loop(settings.SELF_HEALING_INTERVAL_SECONDS))
+        )
     if "pytest" not in sys.modules:
         from futuris.integrations.memora_event_consumer import memora_event_worker
 
         if settings.MEMORA_API_KEY:
             background_tasks.append(asyncio.create_task(memora_event_worker()))
 
-        if should_seed_demo_on_startup(
-            settings.APP_ENV, settings.STARTUP_DEMO_SEED_ENABLED
-        ):
+        if should_seed_demo_on_startup(settings.APP_ENV, settings.STARTUP_DEMO_SEED_ENABLED):
 
             async def _bg_seed():
                 try:
@@ -81,10 +133,15 @@ async def lifespan(app: FastAPI):
             background_tasks.append(asyncio.create_task(_bg_seed()))
 
     yield
+    if scheduler is not None:
+        await scheduler.shutdown()
+    if scheduler_session is not None:
+        await scheduler_session.close()
     for task in background_tasks:
         task.cancel()
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
+    await event_emitter.aclose()
     logger.info("application_shutdown")
 
 
@@ -131,6 +188,7 @@ app.include_router(market_router, prefix="/v1/futuris")
 app.include_router(market_router, prefix="/api/v1/futuris")
 app.include_router(market_router, prefix="/v1/market")
 app.include_router(predictions_router)
+app.include_router(self_status_router)
 app.include_router(webhooks_router, prefix="/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 
@@ -140,6 +198,7 @@ app.include_router(webhooks_router, prefix="/api/v1")
 async def execute_task(body: dict):
     """Reject generic tasks until they can be routed to a real evidence-backed handler."""
     from fastapi import HTTPException, status
+
     action = body.get("action", "forecast")
     payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
 
@@ -160,7 +219,8 @@ async def execute_task(body: dict):
         "command",
     }
     if action_lower in forbidden or any(
-        k in payload for k in ["command", "commands", "script", "bash_command", "exec", "mitigation_command"]
+        k in payload
+        for k in ["command", "commands", "script", "bash_command", "exec", "mitigation_command"]
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -178,8 +238,7 @@ async def execute_task(body: dict):
         ),
     )
 
-from starlette.exceptions import HTTPException
-from starlette.types import Scope
+
 
 
 class SPAStaticFiles(StaticFiles):
@@ -223,14 +282,21 @@ async def root(request: Request) -> Any:
 
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
 async def health_check() -> dict[str, Any]:
-    """Health check endpoint returning system status and current version.
+    """Health check: process liveness *and* a measured storage verdict.
 
     This answer proves the process is up and serving requests. It does not probe
-    any dependency, so it says so instead of leaving the reader to guess.
+    any dependency, so it says so instead of leaving the reader to guess -- but
+    storage is checked, because a process that is up while its database is
+    unusable is not healthy. ``status`` is ``degraded`` when storage is not
+    ready, and the storage block carries the measurement.
     """
+    from futuris.storage.db import verify_schema
+
+    storage = await verify_schema()
     return {
-        "status": "ok",
-        "evidence_class": "process_liveness",
+        "status": "ok" if storage["ready"] else "degraded",
+        "evidence_class": "process_liveness_plus_storage_probe",
         "observed_at": datetime.now(UTC).isoformat(),
         "version": __version__,
+        "storage": storage,
     }
