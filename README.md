@@ -24,7 +24,7 @@ python -m futuris.cli demo
 python -m futuris.cli serve --port 8000
 ```
 - **Dashboard UI**: [http://127.0.0.1:8000/ui](http://127.0.0.1:8000/ui)
-- **OpenAPI Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- **OpenAPI Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) (enabled outside production; disabled there unless `DOCS_ENABLED=true`, see [SECURITY.md](SECURITY.md) §5)
 - **Metrics**: [http://127.0.0.1:8000/metrics](http://127.0.0.1:8000/metrics)
 
 ---
@@ -52,5 +52,5 @@ futuris/
 
 ## 🛡️ Security, Governance & Status
 
-- **Phases 0–4 (Complete)**: Core engine, persistence repositories, synthetic telemetry connectors, feature engineering, statsforecast adapters, statistical calibration, lifecycle outcome resolution, counterfactual scenarios, driver extraction, minimal advisory agents, versioned REST API, autonomous scheduler, React UI, and RBAC governance.
-- **Phases 5–6 (Queued)**: External platform ecosystem adapters (NEXUS, FRIDAY).
+- **Complete**: Core engine, persistence repositories, telemetry connectors (synthetic generator + NEXUS/Forge/TradingBot/IntelX brokers), feature engineering, statsforecast adapters, statistical calibration, lifecycle outcome resolution, counterfactual scenarios, driver extraction, advisory agents, versioned REST API (`/v1`), autonomous scheduler, self-healing supervisor, FRIDAY delegation surface (`/v1/friday/*`), universe predictions (`/v1/predictions/*`), market forecasting (`/v1/market/*`, `/v1/futuris/*`), webhooks with HMAC signing, React UI, and RBAC governance.
+- **Live-fire hardening (2026-10-07)**: `scripts/extreme_pressure_harness.py` drives a running server through retry storms, lifecycle races and dead ends; every fix it found is pinned by a regression test in `tests/api/test_live_fire_regressions.py`.
