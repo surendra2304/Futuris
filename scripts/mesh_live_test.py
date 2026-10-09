@@ -303,6 +303,21 @@ async def run(args: argparse.Namespace) -> int:
     logs = ROOT / "data" / "mesh_live_logs"
     logs.mkdir(parents=True, exist_ok=True)
 
+    # Start from a clean slate: FRIDAY delegation is idempotent on
+    # friday_request_id, so a re-run against a leftover database would replay
+    # cached forecasts (instant responses, no peer calls) and fail steps that
+    # assert live collaboration. The mesh is reset over HTTP below; the Futuris
+    # database and evidence store must be reset on disk before boot.
+    for stale in (
+        ROOT / "data" / "mesh_live.db",
+        ROOT / "data" / "mesh_live.db-wal",
+        ROOT / "data" / "mesh_live.db-shm",
+    ):
+        stale.unlink(missing_ok=True)
+    import shutil
+
+    shutil.rmtree(ROOT / "data" / "storage_mesh_live", ignore_errors=True)
+
     def spawn(name: str, command: list[str], log_name: str) -> subprocess.Popen:
         handle = (logs / log_name).open("w", encoding="utf-8")
         process = subprocess.Popen(  # noqa: SIM115 - the handle must outlive this call
