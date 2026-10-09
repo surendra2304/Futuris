@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -111,10 +112,49 @@ class Finding:
 @dataclass
 class Summary:
     checked: int = 0
+    backpressure: int = 0  # 503 storage_busy envelopes: documented SQLite write contention
     findings: list[Finding] = field(default_factory=list)
 
     def add(self, finding: Finding) -> None:
         self.findings.append(finding)
+
+
+def is_storage_busy(response) -> bool:
+    """True for the documented 503 storage_busy envelope (SQLite write contention)."""
+    try:
+        return response.json()["error"]["code"] == "storage_busy"
+    except Exception:
+        return False
+
+
+ALIAS_RULES = (
+    ("/api/v1/futuris/", "/v1/futuris/"),
+    ("/v1/market/", "/v1/futuris/"),
+    ("/api/v1/", "/v1/"),
+    ("/api/", "/v1/"),
+)
+
+
+def expand_aliases(spec: dict, runtime_paths: set[str]) -> dict:
+    """Attach hidden alias mounts (M12) to their canonical operation.
+
+    The alias paths are routed but absent from the OpenAPI schema, so the harness
+    would otherwise stop exercising them. Each alias reuses the schema entry of the
+    canonical path it mirrors.
+    """
+    # app.openapi() returns the application's cached schema: work on a copy.
+    spec = copy.deepcopy(spec)
+    paths = spec.setdefault("paths", {})
+    for path in sorted(runtime_paths):
+        if path in paths:
+            continue
+        for alias_prefix, canonical_prefix in ALIAS_RULES:
+            if path.startswith(alias_prefix):
+                twin = canonical_prefix + path[len(alias_prefix):]
+                if twin in paths:
+                    paths[path] = paths[twin]
+                break
+    return spec
 
 
 def envelope_ok(status: int, body: str) -> str | None:
@@ -243,6 +283,11 @@ async def probe(
     expected = expected_degraded(method.upper() + " " + (template or path))
     if expected and status in expected[0]:
         return
+    if status == 503 and is_storage_busy(response):
+        # Documented backpressure: SQLite write contention answers with the
+        # storage_busy envelope and its remediation. Counted, not a finding.
+        summary.backpressure += 1
+        return
     if status >= 500:
         summary.add(
             Finding(method.upper() + " " + path, case, status, "server error", body[:2000])
@@ -299,6 +344,7 @@ async def run_against(
 
 def report(summary: Summary) -> int:
     print(f"\ncases executed: {summary.checked}")
+    print(f"documented backpressure (503 storage_busy, not findings): {summary.backpressure}")
     print(f"findings: {len(summary.findings)}")
     by_operation: dict[str, int] = {}
     for finding in summary.findings:
@@ -353,9 +399,9 @@ async def main() -> int:
             if spec_source:
                 spec = (await client.get(spec_source)).json()
             else:
-                from futuris.api.app import app
+                from futuris.api.app import app, iter_route_paths
 
-                spec = app.openapi()
+                spec = expand_aliases(app.openapi(), iter_route_paths(app))
 
             if args.limit_operations:
                 spec = {"paths": dict(list(spec["paths"].items())[: args.limit_operations])}
