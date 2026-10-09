@@ -17,12 +17,30 @@ function getHeaders(): HeadersInit {
   return headers;
 }
 
+/**
+ * The message to show for a failed response body.
+ *
+ * The API error envelope is {"error": {"code", "message", "details"}}; its message
+ * wins. Bodies that predate the envelope carry the text in ``detail`` or ``message``.
+ * Anything else is shown as JSON. (Reading only the top level used to show users the
+ * raw envelope instead of the message.)
+ */
+export function errorDetailFrom(body: unknown): string {
+  const record = (body ?? {}) as {
+    error?: { message?: unknown };
+    detail?: unknown;
+    message?: unknown;
+  };
+  const detail =
+    record.error?.message ?? record.detail ?? record.message ?? JSON.stringify(body);
+  return typeof detail === 'string' ? detail : JSON.stringify(detail);
+}
+
 async function handleResponse<T>(res: Response, fallbackMsg: string): Promise<T> {
   if (!res.ok) {
     let errorDetail = '';
     try {
-      const errorJson = await res.json();
-      errorDetail = errorJson.detail || errorJson.message || JSON.stringify(errorJson);
+      errorDetail = errorDetailFrom(await res.json());
     } catch {
       errorDetail = await res.text().catch(() => '');
     }
