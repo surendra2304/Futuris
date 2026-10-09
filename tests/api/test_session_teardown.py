@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 import futuris.api.deps as deps
+import futuris.storage.db as storage_db
 from futuris.api.app import app
 from futuris.api.errors import FuturisAPIError
 from futuris.api.routers import market as market_router
@@ -66,7 +67,7 @@ async def client(
     """Client wired to the *real* ``get_db_session`` + a temp file database."""
     factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     monkeypatch.setattr(settings, "FUTURIS_API_KEY", API_KEY)
-    monkeypatch.setattr(deps, "async_session_factory", factory)
+    monkeypatch.setattr(storage_db, "async_session_factory", factory)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://testserver", headers={"X-API-Key": API_KEY}
@@ -226,7 +227,7 @@ async def test_market_route_persists_and_labels_live_evidence(
     assert payload["evidence_source"] == "stratex_telemetry"
 
     forecast_id = UUID(payload["forecast_id"])
-    factory: async_sessionmaker[AsyncSession] = deps.async_session_factory  # type: ignore[assignment]
+    factory: async_sessionmaker[AsyncSession] = storage_db.async_session_factory  # type: ignore[assignment]
     async with factory() as session:
         stored = await ForecastRepository(session).get(forecast_id)
         assert stored is not None
@@ -245,7 +246,7 @@ async def test_session_guard_reports_a_swallowed_storage_failure(
     session back and raise a mapped storage error -- not ``PendingRollbackError``.
     """
     factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-    monkeypatch.setattr(deps, "async_session_factory", factory)
+    monkeypatch.setattr(storage_db, "async_session_factory", factory)
 
     generator = deps.get_db_session()
     session = await generator.__anext__()
@@ -275,7 +276,7 @@ async def test_teardown_never_masks_the_original_error(
 ) -> None:
     """The common path: the handler raised, so teardown re-raises the same error."""
     factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-    monkeypatch.setattr(deps, "async_session_factory", factory)
+    monkeypatch.setattr(storage_db, "async_session_factory", factory)
 
     generator = deps.get_db_session()
     session = await generator.__anext__()

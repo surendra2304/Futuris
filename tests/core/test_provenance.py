@@ -159,23 +159,35 @@ async def test_universe_context_forecast_hashes_the_context_it_used():
 
 @pytest.mark.asyncio
 async def test_universe_forecast_without_context_is_labelled_and_computed():
-    """No caller estimate: the number comes from the pipeline, labelled synthetic."""
+    """No caller estimate: only pipeline targets get a computed number.
+
+    ``friday:orchestration:system_health_24h`` has no telemetry source in this
+    deployment, so the honest answer is an insufficient-data forecast that says
+    so -- never a demand-model number relabelled as a health index. Pipeline
+    targets (the checkout capacity series) are still computed and labelled.
+    """
     from futuris.core.universe_forecasting import generate_universe_forecast
 
     forecast = await generate_universe_forecast(
         "friday:orchestration:system_health_24h", skip_intelx=True
     )
 
-    assert forecast.evidence_class in (EvidenceClass.SYNTHETIC, EvidenceClass.LIVE)
-    assert forecast.evidence_source is not None
-    if forecast.status.value == "insufficient_data":
-        assert forecast.model_metadata["blocked_reason"] == "insufficient_data_detected"
-        assert forecast.prediction == 0.0 and forecast.range_lower == forecast.range_upper == 0.0
-        assert forecast.evidence == []
-    else:
-        # A served number must never be one of the old hardcoded placeholders.
-        assert forecast.prediction not in {94.5, 2840.0, 48.0}
-        assert forecast.evidence, "a served forecast must carry its evidence"
+    assert forecast.status.value == "insufficient_data"
+    assert forecast.evidence_class == EvidenceClass.SYNTHETIC
+    assert forecast.model_metadata["blocked_reason"] == "insufficient_data_detected"
+    assert forecast.prediction == 0.0 and forecast.range_lower == forecast.range_upper == 0.0
+    assert forecast.evidence == []
+    assert forecast.evidence_source is None
+    assert "no configured telemetry pipeline" in forecast.model_metadata["error"]
+
+    # The one pipeline target still computes, labelled synthetic.
+    computed = await generate_universe_forecast(
+        "service:checkout:capacity_exceedance_24h", skip_intelx=True
+    )
+    assert computed.status.value == "active"
+    assert computed.evidence_class == EvidenceClass.SYNTHETIC
+    assert computed.evidence_source == "synthetic_telemetry_generator"
+    assert computed.evidence, "a served forecast must carry its evidence"
 
 
 @pytest.mark.asyncio
@@ -195,8 +207,10 @@ async def test_universe_insufficient_data_forecast_carries_no_invented_values():
     original = pipeline_module.ForecastingPipeline
     pipeline_module.ForecastingPipeline = _FailingPipeline
     try:
+        # A pipeline target: the failing pipeline must surface as an honest
+        # insufficient-data forecast, not an exception and not a placeholder.
         forecast = await uf.generate_universe_forecast(
-            "friday:orchestration:system_health_24h", skip_intelx=True
+            "service:checkout:capacity_exceedance_24h", skip_intelx=True
         )
     finally:
         pipeline_module.ForecastingPipeline = original

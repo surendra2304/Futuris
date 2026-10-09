@@ -52,6 +52,7 @@ from futuris.features.normalize import (
     validate_horizon,
 )
 from futuris.infra.audit import AuditLogger
+from futuris.infra.config import settings
 from futuris.storage.models import Base
 
 
@@ -75,8 +76,8 @@ async def futuris_test_db():
 def auth_headers(monkeypatch) -> dict[str, str]:
     """Provide authorized headers with mock FRIDAY API key."""
     api_key = "friday_secret_master_test_key_1234567890"
-    monkeypatch.setenv("FUTURIS_FRIDAY_API_KEY", api_key)
-    monkeypatch.setenv("FUTURIS_API_KEY", "futuris_master_test_key_1234567890abcdef")
+    monkeypatch.setattr(settings, "FUTURIS_FRIDAY_API_KEY", api_key)
+    monkeypatch.setattr(settings, "FUTURIS_API_KEY", "futuris_master_test_key_1234567890abcdef")
     return {"X-API-Key": api_key}
 
 

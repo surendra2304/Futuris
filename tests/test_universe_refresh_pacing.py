@@ -90,7 +90,7 @@ async def test_one_request_spends_one_budget(monkeypatch):
     response = await refresh_universe_predictions(
         background_tasks=None,
         user=AuthUser(label="test", role="analyst"),
-        session=object(),
+        session=_AuditableSession(),
     )
 
     assert response.total_active_targets == len(UNIVERSE_TARGETS)
@@ -106,6 +106,16 @@ async def test_one_request_spends_one_budget(monkeypatch):
     assert passed_down <= uf.REFRESH_BUDGET_SECONDS
 
 
+class _AuditableSession:
+    """Accepts the writes the refresh route makes after the matrix pass (audit rows)."""
+
+    def add(self, obj) -> None:
+        return None
+
+    async def flush(self) -> None:
+        return None
+
+
 class _EmptyRepo:
     """Stands in for ForecastRepository: a store with no active forecasts."""
 
@@ -113,6 +123,9 @@ class _EmptyRepo:
         self.session = session
 
     async def list_by_status(self, status):
+        return []
+
+    async def list_by_statuses(self, statuses):
         return []
 
     async def create(self, forecast):
@@ -143,6 +156,9 @@ async def test_matrix_assembles_a_mix_of_aware_and_naive_forecasts(monkeypatch):
             pass
 
         async def list_by_status(self, status):
+            return list(mixed)
+
+        async def list_by_statuses(self, statuses):
             return list(mixed)
 
     monkeypatch.setattr(predictions, "ForecastRepository", _MixedRepo)
