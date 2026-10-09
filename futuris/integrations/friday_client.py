@@ -25,7 +25,7 @@ class FridayClient:
     )
 
     # 2. Before executing scaling/shedding, simulate counterfactual stress scenario
-    stress_spec = ScenarioSpec.stress_spec(demand_multiplier=1.4, capacity_override=3200)
+    stress_spec = ScenarioSpec.stress(demand_multiplier=1.4, capacity_multiplier=0.8)
     comparison = await client.compare_scenarios(
         forecast_id=forecast.forecast_id,
         scenarios=[stress_spec],

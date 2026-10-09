@@ -23,7 +23,7 @@ from futuris.core.hashing import content_hash_of
 from futuris.core.schemas import Driver, EvidenceRef, Forecast
 from futuris.ecosystem.adapters import ecosystem_adapter
 from futuris.infra.audit import AuditLogger
-from futuris.infra.auth import AllowAnonymousRead, RequireAnalyst
+from futuris.infra.auth import AllowAnonymousHeavyRead, AllowAnonymousRead, RequireAnalyst
 from futuris.infra.config import settings
 from futuris.infra.logging import get_logger
 from futuris.integrations.memora_forecast_publisher import (
@@ -492,7 +492,7 @@ async def post_market_forecast(
     summary="Query Latest Market Volatility Forecast for Asset",
 )
 async def get_market_forecast(
-    user: AllowAnonymousRead,
+    user: AllowAnonymousHeavyRead,
     symbol: str = Query("BTCUSDT"),
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
 ) -> MarketForecastResponse:

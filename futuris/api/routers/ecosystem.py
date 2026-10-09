@@ -3,11 +3,14 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from futuris.api.deps import get_db_session
 from futuris.demo.seed import DemoSeeder
 from futuris.ecosystem.adapters import ecosystem_adapter
+from futuris.infra.audit import AuditLogger
 from futuris.infra.auth import AllowAnonymousRead, RequireAdmin
 from futuris.infra.logging import get_logger
 
@@ -119,6 +122,7 @@ async def get_ecosystem_peers(user: AllowAnonymousRead) -> Any:
 async def seed_workspace(
     background_tasks: BackgroundTasks,
     user: RequireAdmin,
+    session: AsyncSession = Depends(get_db_session),
 ) -> Any:
     """Manually trigger historical 180-day telemetry and forecast seed.
 
@@ -128,6 +132,8 @@ async def seed_workspace(
     logger.info("manual_demo_seed_triggered", triggered_by=user.label)
 
     if not seed_guard.claim():
+        # A rejected trigger mutates nothing: no audit row, and no write-lock
+        # acquisition that would contend with the seed that is already running.
         return SeedResponse(
             status="already_running",
             message=(
@@ -137,6 +143,16 @@ async def seed_workspace(
             started_at=seed_guard.started_at,
             completed_runs=seed_guard.completed_runs,
         )
+
+    # Seeding rewrites the workspace: the accepted trigger is a mutating action
+    # and is audited (written before the background seed takes the write lock).
+    await AuditLogger(session).log_mutation(
+        actor_label=user.label,
+        action="trigger_demo_seed",
+        entity="workspace",
+        entity_id="demo_seed",
+        payload={"triggered_by": user.label},
+    )
 
     background_tasks.add_task(seed_guard.run_once, lambda: DemoSeeder(seed=42))
     return SeedResponse(

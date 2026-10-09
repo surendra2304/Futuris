@@ -42,9 +42,41 @@ from futuris.infra.logging import configure_logging, get_logger
 from futuris.infra.metrics import metrics_endpoint
 from futuris.storage.db import async_session_factory, ensure_schema
 from futuris.storage.models import ForecastModel
+from futuris.upgrade.safe_config import is_production_environment
 
 configure_logging()
 logger = get_logger("futuris.api")
+
+# Published by the lifespan so /v1/self/status reports the scheduler that is
+# actually running in this process rather than assuming it
+# (SelfHealingSupervisor.check_scheduler reads this attribute).
+_running_scheduler: Any = None
+
+
+def iter_route_paths(application: FastAPI) -> set[str]:
+    """Every route path mounted on the app, including router-mounted routes.
+
+    Current FastAPI wraps ``include_router`` results in a lazy ``_IncludedRouter``
+    that exposes no ``.path`` attribute, so a naive ``getattr(route, "path", ...)``
+    walk silently drops every router-mounted route and reports the agent surface
+    as broken when it is not. This walker expands included routers through their
+    effective candidates and is duck-typed so it survives FastAPI upgrades.
+    """
+    paths: set[str] = set()
+
+    def walk(route: Any) -> None:
+        candidates = getattr(route, "effective_candidates", None)
+        if callable(candidates):
+            for candidate in candidates():
+                walk(candidate)
+            return
+        path = getattr(route, "path", None)
+        if isinstance(path, str):
+            paths.add(path)
+
+    for route in application.routes:
+        walk(route)
+    return paths
 
 
 @asynccontextmanager
@@ -94,9 +126,10 @@ async def lifespan(_app: FastAPI):
             emitter=event_emitter,
         )
         scheduler.start()
-        # Published for /v1/self/status: the supervisor reports what is
-        # actually running rather than assuming the scheduler started.
-        _running_scheduler = scheduler
+        # Published at module level for /v1/self/status: the supervisor reports
+        # what is actually running rather than assuming the scheduler started.
+        # (A plain local assignment would be invisible to the module.)
+        globals()["_running_scheduler"] = scheduler
 
     background_tasks: list[asyncio.Task] = []
     if "pytest" not in sys.modules and settings.SELF_HEALING_ENABLED:
@@ -135,6 +168,7 @@ async def lifespan(_app: FastAPI):
     yield
     if scheduler is not None:
         await scheduler.shutdown()
+    globals()["_running_scheduler"] = None
     if scheduler_session is not None:
         await scheduler_session.close()
     for task in background_tasks:
@@ -155,6 +189,51 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Policy for the single-page console only. The console is one same-origin module
+# script with no inline script and no external stylesheet or font (verified against
+# futuris/ui/dist/index.html). 'unsafe-inline' is limited to styles because React and
+# recharts set style attributes at runtime. Swagger UI on /docs loads its assets from a
+# CDN and would be broken by this policy, which is why it is scoped to /ui.
+UI_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Baseline browser hardening headers (S12).
+
+    ``nosniff``, ``X-Frame-Options`` and the referrer and permissions policies apply
+    to every response. The CSP applies only to ``/ui``. HSTS is sent only in
+    production, because over plain HTTP in development it would pin the browser to
+    an origin that does not serve TLS.
+    """
+
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
+        response = await call_next(request)
+        headers = response.headers
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("X-Frame-Options", "DENY")
+        headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        path = request.url.path
+        if path == "/ui" or path.startswith("/ui/"):
+            headers.setdefault("Content-Security-Policy", UI_CONTENT_SECURITY_POLICY)
+        if is_production_environment(settings.APP_ENV):
+            headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return response
+
+
+def _docs_enabled() -> bool:
+    """OpenAPI and Swagger UI: on outside production unless DOCS_ENABLED says otherwise (S11)."""
+    if settings.DOCS_ENABLED is not None:
+        return settings.DOCS_ENABLED
+    return not is_production_environment(settings.APP_ENV)
+
+
+_DOCS_ENABLED = _docs_enabled()
+
 app = FastAPI(
     title="FUTURIS API",
     description=(
@@ -162,19 +241,24 @@ app = FastAPI(
         "Provides calibration, evidence anchoring, scenarios, and decision support."
     ),
     version=__version__,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
     lifespan=lifespan,
 )
 
 # 1. Register Middlewares
 app.add_middleware(RequestIdMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # 2. Register Global Error Envelope Handlers
 register_error_handlers(app)
 
 # 3. Mount Versioned Routers (/v1)
+# Each router is mounted once under its canonical prefix. The /api and alias mounts
+# are kept because existing callers use them, but they are hidden from the OpenAPI
+# schema so one operation is documented once (M12). Canonical: /v1/futuris, /v1/market
+# is an alias of the same handler, /v1/webhooks paths live under /v1.
 app.include_router(forecasts_router)
 app.include_router(scenarios_router)
 app.include_router(evaluation_router)
@@ -182,19 +266,19 @@ app.include_router(events_router)
 app.include_router(models_router)
 app.include_router(audit_router)
 app.include_router(friday_router)
-app.include_router(friday_router, prefix="/api")
+app.include_router(friday_router, prefix="/api", include_in_schema=False)
 app.include_router(ecosystem_router)
 app.include_router(market_router, prefix="/v1/futuris")
-app.include_router(market_router, prefix="/api/v1/futuris")
-app.include_router(market_router, prefix="/v1/market")
+app.include_router(market_router, prefix="/api/v1/futuris", include_in_schema=False)
+app.include_router(market_router, prefix="/v1/market", include_in_schema=False)
 app.include_router(predictions_router)
 app.include_router(self_status_router)
 app.include_router(webhooks_router, prefix="/v1")
-app.include_router(webhooks_router, prefix="/api/v1")
+app.include_router(webhooks_router, prefix="/api/v1", include_in_schema=False)
 
 
 @app.post("/v1/task/execute", tags=["Universal Task Protocol"])
-@app.post("/api/v1/task/execute", tags=["Universal Task Protocol"])
+@app.post("/api/v1/task/execute", tags=["Universal Task Protocol"], include_in_schema=False)
 async def execute_task(body: dict):
     """Reject generic tasks until they can be routed to a real evidence-backed handler."""
     from fastapi import HTTPException, status
@@ -268,7 +352,8 @@ async def get_metrics() -> Response:
     return metrics_endpoint()
 
 
-@app.api_route("/", methods=["GET", "HEAD"], tags=["Root"])
+@app.head("/", include_in_schema=False)
+@app.get("/", tags=["Root"])
 async def root(request: Request) -> Any:
     """Root endpoint for UptimeRobot / uptime probes. Redirects browsers to UI."""
     if "text/html" in request.headers.get("accept", ""):
@@ -280,7 +365,8 @@ async def root(request: Request) -> Any:
     }
 
 
-@app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
+@app.head("/health", include_in_schema=False)
+@app.get("/health", tags=["Health"])
 async def health_check() -> dict[str, Any]:
     """Health check: process liveness *and* a measured storage verdict.
 

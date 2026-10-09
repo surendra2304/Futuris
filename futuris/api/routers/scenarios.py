@@ -4,8 +4,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from futuris.api.deps import get_forecast_repo, get_scenario_repo
+from futuris.api.deps import get_db_session, get_forecast_repo, get_scenario_repo
+from futuris.infra.audit import AuditLogger
 from futuris.infra.auth import RequireAnalyst
 from futuris.scenarios.engine import (
     ScenarioComparison,
@@ -28,11 +30,12 @@ class RunScenariosRequest(BaseModel):
 
 @router.post("", response_model=list[ScenarioResult], summary="Run Scenarios for Forecast")
 async def run_scenarios(
-    forecast_id: UUID,
     req: RunScenariosRequest,
     user: RequireAnalyst,
+    forecast_id: UUID,
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
     scenario_repo: ScenarioRepository = Depends(get_scenario_repo),
+    session: AsyncSession = Depends(get_db_session),
 ) -> list[ScenarioResult]:
     _ = user  # auth dependency; identity handled by the role guard
     """Execute scenario specifications against parent forecast without mutating base data."""
@@ -52,6 +55,18 @@ async def run_scenarios(
         )
         results.append(res)
 
+    await AuditLogger(session).log_mutation(
+        actor_label=user.label,
+        action="run_scenarios",
+        entity="forecast",
+        entity_id=str(forecast_id),
+        payload={
+            "scenarios": [s.name for s in req.scenarios],
+            "monte_carlo": req.use_monte_carlo,
+            "num_samples": req.num_samples,
+        },
+    )
+
     return results
 
 
@@ -62,6 +77,7 @@ async def compare_scenarios(
     user: RequireAnalyst,
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
     scenario_repo: ScenarioRepository = Depends(get_scenario_repo),
+    session: AsyncSession = Depends(get_db_session),
 ) -> ScenarioComparison:
     _ = user  # auth dependency; identity handled by the role guard
     """Run and compare diverging scenarios side-by-side with sensitivity ranking."""
@@ -81,4 +97,17 @@ async def compare_scenarios(
         )
         results.append(res)
 
-    return engine.compare(base_forecast=f, results=results)
+    comparison = engine.compare(base_forecast=f, results=results)
+
+    await AuditLogger(session).log_mutation(
+        actor_label=user.label,
+        action="compare_scenarios",
+        entity="forecast",
+        entity_id=str(forecast_id),
+        payload={
+            "scenarios": [s.name for s in req.scenarios],
+            "top_divergence": comparison.divergence_ranking[:1],
+        },
+    )
+
+    return comparison

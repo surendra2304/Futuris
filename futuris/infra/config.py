@@ -125,16 +125,79 @@ class Settings(BaseSettings):
         default="https://friday-zw59.onrender.com",
         description="Live Friday URL",
     )
+    FUTURIS_TELEMETRY_SOURCE: Literal["synthetic", "nexus"] = Field(
+        default="synthetic",
+        description=(
+            "Telemetry source for the unattended scheduler: the deterministic "
+            "synthetic generator (default) or the NEXUS telemetry broker."
+        ),
+    )
+    NEXUS_URL: str = Field(
+        default="http://nexus-service.local",
+        description="NEXUS telemetry broker URL (used when FUTURIS_TELEMETRY_SOURCE=nexus)",
+    )
+    NEXUS_API_KEY: str | None = Field(
+        default=None,
+        description="NEXUS telemetry broker API key",
+    )
     FUTURIS_FRIDAY_API_KEY: str | None = Field(
         default=None,
-        description="FRIDAY ecosystem API Key",
+        validation_alias=AliasChoices("FUTURIS_FRIDAY_API_KEY", "FRIDAY_API_KEY"),
+        description="FRIDAY ecosystem API Key (FRIDAY_API_KEY accepted as an alias)",
+    )
+    INTELX_WEBHOOK_API_KEY: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("INTELX_WEBHOOK_API_KEY"),
+        description="Shared secret for inbound IntelX research webhooks",
+    )
+
+    DOCS_ENABLED: bool | None = Field(
+        default=None,
+        description=(
+            "Serve /docs, /redoc and /openapi.json. Unset (null) means enabled outside "
+            "production and disabled in production; set true or false to override."
+        ),
+    )
+    ANONYMOUS_READ_RATE_LIMIT_PER_MINUTE: int = Field(
+        default=120,
+        ge=1,
+        le=100000,
+        description="Requests per minute per client address for anonymous reads (no API key).",
+    )
+    ANONYMOUS_HEAVY_READ_RATE_LIMIT_PER_MINUTE: int = Field(
+        default=6,
+        ge=1,
+        le=100000,
+        description=(
+            "Requests per minute per client address for anonymous reads that compute or "
+            "persist forecasts: GET /v1/futuris/forecast, GET /v1/market/forecast, "
+            "GET /v1/predictions/matrix."
+        ),
+    )
+    TRUST_PROXY_HEADERS: bool = Field(
+        default=False,
+        description=(
+            "Take the client address from the rightmost X-Forwarded-For entry. Enable only "
+            "behind a reverse proxy that appends to X-Forwarded-For; otherwise clients can "
+            "spoof their address and escape the anonymous budget."
+        ),
     )
 
     def validate_production_safety(self) -> None:
         """Enforce safe_config checks if running under production environment."""
         from futuris.upgrade.safe_config import (
+            is_production_environment,
             production_env_guard,
         )
+
+        # Disabling key enforcement grants every request full admin. That is a
+        # development convenience and must never reach production, whatever
+        # the other credentials look like (B20).
+        if is_production_environment(self.APP_ENV) and not self.API_KEYS_ENABLED:
+            raise RuntimeError(
+                "API_KEYS_ENABLED=false is refused in production: it would grant every "
+                "request full admin access"
+            )
 
         values = {
             "FUTURIS_API_KEY": self.FUTURIS_API_KEY,

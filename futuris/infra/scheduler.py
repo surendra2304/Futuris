@@ -10,10 +10,10 @@ import pandas as pd
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from futuris.agents.runner import AgentRunner
-from futuris.connectors.synthetic_telemetry import SyntheticTelemetryConnector
+from futuris.connectors.factory import build_scheduler_connector
 from futuris.core.enums import ForecastEventType, ForecastStatus
 from futuris.core.lifecycle import LifecycleManager
-from futuris.core.pipeline import ForecastingPipeline
+from futuris.core.pipeline import ForecastingPipeline, IngestionStage
 from futuris.core.schemas import Forecast, ForecastEvent
 from futuris.evaluation.backtest import BacktestEngine
 from futuris.evaluation.drift import DriftMonitor
@@ -60,7 +60,11 @@ class ForecastScheduler:
         self.outcome_repo = outcome_repo
         self.event_repo = event_repo
         self.emitter = emitter or event_emitter
-        self.pipeline = pipeline or ForecastingPipeline()
+        # The unattended pipeline reads from the configured telemetry source
+        # (FUTURIS_TELEMETRY_SOURCE), not a hardcoded synthetic generator.
+        self.pipeline = pipeline or ForecastingPipeline(
+            ingestion=IngestionStage(connector=build_scheduler_connector())
+        )
         self.agent_runner = agent_runner or AgentRunner()
         self.lifecycle_manager = lifecycle_manager
         self.drift_monitor = DriftMonitor(event_repo=event_repo)
@@ -89,7 +93,7 @@ class ForecastScheduler:
     async def ingest_job(self) -> int:
         """Scheduled ingestion job pulling fresh telemetry."""
         logger.info("ingest_job_started")
-        connector = SyntheticTelemetryConnector(seed=42)
+        connector = build_scheduler_connector()
         now = datetime.now(UTC)
         obs = await connector.fetch(now - timedelta(days=1), now)
         logger.info("ingest_job_completed", points=len(obs))
@@ -152,7 +156,7 @@ class ForecastScheduler:
         logger.info("lifecycle_sweep_job_started")
         if self.lifecycle_manager:
             now = datetime.now(UTC)
-            connector = SyntheticTelemetryConnector(seed=42)
+            connector = build_scheduler_connector()
             obs = await connector.fetch(now - timedelta(days=2), now)
             df = pd.DataFrame([{"timestamp": o.observed_at, "value": o.value} for o in obs])
             return await self.lifecycle_manager.run_lifecycle_sweep(observations_df=df, as_of=now)

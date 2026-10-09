@@ -2,9 +2,9 @@
 
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from futuris.core.enums import (
@@ -209,6 +209,85 @@ class ForecastRepository:
         result = await self.session.execute(stmt)
         return [self._to_domain(m) for m in result.scalars().all()]
 
+    def _filtered_stmt(
+        self,
+        *,
+        target: str | None = None,
+        status: ForecastStatus | None = None,
+        as_of_after: datetime | None = None,
+        as_of_before: datetime | None = None,
+    ) -> Any:
+        """Shared WHERE builder for filtered forecast queries."""
+        stmt: Any = select(ForecastModel)
+        if target is not None:
+            stmt = stmt.where(ForecastModel.target == target)
+        if status is not None:
+            stmt = stmt.where(ForecastModel.status == status.value)
+        if as_of_after is not None:
+            stmt = stmt.where(ForecastModel.as_of >= as_of_after)
+        if as_of_before is not None:
+            stmt = stmt.where(ForecastModel.as_of <= as_of_before)
+        return stmt
+
+    async def list_filtered(
+        self,
+        *,
+        target: str | None = None,
+        status: ForecastStatus | None = None,
+        as_of_after: datetime | None = None,
+        as_of_before: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Forecast]:
+        """Filtered, paginated forecast listing.
+
+        Pagination happens in SQL: ``limit``/``offset`` bound the rows the
+        database returns, so the parameter is a real resource bound rather
+        than a slice applied after loading the whole table.
+        """
+        stmt = self._filtered_stmt(
+            target=target, status=status, as_of_after=as_of_after, as_of_before=as_of_before
+        )
+        stmt = stmt.order_by(ForecastModel.as_of.desc()).limit(limit).offset(offset)
+        result = await self.session.execute(stmt)
+        return [self._to_domain(m) for m in result.scalars().all()]
+
+    async def count_filtered(
+        self,
+        *,
+        target: str | None = None,
+        status: ForecastStatus | None = None,
+        as_of_after: datetime | None = None,
+        as_of_before: datetime | None = None,
+    ) -> int:
+        """Count of forecasts matching the filters (for pagination headers)."""
+        stmt: Any = select(func.count(ForecastModel.forecast_id))
+        if target is not None:
+            stmt = stmt.where(ForecastModel.target == target)
+        if status is not None:
+            stmt = stmt.where(ForecastModel.status == status.value)
+        if as_of_after is not None:
+            stmt = stmt.where(ForecastModel.as_of >= as_of_after)
+        if as_of_before is not None:
+            stmt = stmt.where(ForecastModel.as_of <= as_of_before)
+        return int((await self.session.execute(stmt)).scalar_one())
+
+    async def list_by_statuses(self, statuses: "list[ForecastStatus]") -> list[Forecast]:
+        """List forecasts in any of the given statuses, newest first.
+
+        The universe matrix uses this to pick the latest forecast per target
+        across the "honest non-answer" statuses (insufficient_data, blocked)
+        as well as active ones, so a target that honestly cannot be forecast is
+        not re-generated on every matrix request.
+        """
+        stmt = (
+            select(ForecastModel)
+            .where(ForecastModel.status.in_([s.value for s in statuses]))
+            .order_by(ForecastModel.as_of.desc())
+        )
+        result = await self.session.execute(stmt)
+        return [self._to_domain(m) for m in result.scalars().all()]
+
     async def update_status(self, forecast_id: UUID, new_status: ForecastStatus) -> Forecast | None:
         now = datetime.now(UTC)
         stmt = (
@@ -219,6 +298,50 @@ class ForecastRepository:
         await self.session.execute(stmt)
 
         # Record forecast_updated event in audit trail
+        event = ForecastEventModel(
+            forecast_id=forecast_id,
+            event_type=ForecastEventType.FORECAST_UPDATED.value,
+            payload={"new_status": new_status.value},
+            emitted_at=now,
+        )
+        self.session.add(event)
+        await self.session.flush()
+        return await self.get(forecast_id)
+
+    async def transition_status(
+        self,
+        forecast_id: UUID,
+        allowed_from: "frozenset[ForecastStatus] | set[ForecastStatus]",
+        new_status: ForecastStatus,
+    ) -> Forecast | None:
+        """Move a forecast to ``new_status`` only if it is currently in ``allowed_from``.
+
+        This is the race-safe form of a lifecycle transition. The conditional
+        ``UPDATE ... WHERE status IN (...)`` makes the database the arbiter:
+        when two requests race to mutate the same forecast, the loser's WHERE
+        no longer matches once the winner has committed, so it updates zero
+        rows and the caller answers 409 instead of silently overwriting a
+        terminal state. (Unconditional ``update_status`` let a resolved forecast
+        be invalidated and an invalidated forecast be resolved -- the outcome
+        row and the forecast status then disagreed.)
+
+        Returns the updated forecast, or None when the transition was refused.
+        The session is left clean either way: a refused transition wrote
+        nothing, so there is nothing to roll back.
+        """
+        now = datetime.now(UTC)
+        stmt = (
+            update(ForecastModel)
+            .where(
+                ForecastModel.forecast_id == forecast_id,
+                ForecastModel.status.in_([s.value for s in allowed_from]),
+            )
+            .values(status=new_status.value, updated_at=now)
+        )
+        res = await self.session.execute(stmt)
+        if not res.rowcount:
+            return None
+
         event = ForecastEventModel(
             forecast_id=forecast_id,
             event_type=ForecastEventType.FORECAST_UPDATED.value,
@@ -647,7 +770,9 @@ class EvaluationRepository:
         metrics: dict[str, float],
     ) -> UUID:
         now = datetime.now(UTC)
-        run_id = UUID(int=int(now.timestamp() * 1000000))
+        # Random, not clock-derived: two runs stamped in the same microsecond used to
+        # collide on the primary key under concurrency (R9).
+        run_id = uuid4()
         model = EvaluationRunModel(
             run_id=run_id,
             model_version=model_version,

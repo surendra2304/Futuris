@@ -5,11 +5,16 @@ from typing import Any
 
 import httpx
 
-from futuris.connectors.base import BaseConnector, Observation
+from futuris.connectors.base import BaseConnector, Observation, warn_if_default_credential
 from futuris.core.enums import SignalClass
 from futuris.infra.logging import get_logger
 
 logger = get_logger("futuris.connectors.trading_bot")
+
+#: Public placeholders, kept only so existing constructions keep working; using
+#: them is logged loudly (see warn_if_default_credential).
+TRADING_BOT_DEFAULT_KEY = "trading_bot_default_key"
+TRADING_BOT_DEFAULT_READ_KEY = "read_key_default_secret_123"
 
 
 class TradingBotConnector(BaseConnector):
@@ -23,9 +28,10 @@ class TradingBotConnector(BaseConnector):
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or "trading_bot_default_key"
+        self.api_key = api_key or TRADING_BOT_DEFAULT_KEY
         self.timeout_seconds = timeout_seconds
         self.transport = transport
+        warn_if_default_credential("trading_bot", self.api_key, TRADING_BOT_DEFAULT_KEY, logger)
 
     async def fetch(self, start: datetime, end: datetime) -> list[Observation]:
         """Fetch trading observations across [start, end]."""
@@ -35,8 +41,8 @@ class TradingBotConnector(BaseConnector):
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "X-API-Key": self.api_key
-            if self.api_key != "trading_bot_default_key"
-            else "read_key_default_secret_123",
+            if self.api_key != TRADING_BOT_DEFAULT_KEY
+            else TRADING_BOT_DEFAULT_READ_KEY,
             "Accept": "application/json",
         }
         params = {

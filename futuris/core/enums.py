@@ -78,6 +78,7 @@ class ForecastEventType(StrEnum):
     FORECAST_INVALIDATED = "forecast_invalidated"
     FORECAST_OUTCOME_RECORDED = "forecast_outcome_recorded"
     FORECAST_CANCELLED = "forecast_cancelled"
+    FORECAST_RESOLUTION_FAILED = "forecast_resolution_failed"
     DATA_STALENESS_DETECTED = "data_staleness_detected"
     INSUFFICIENT_DATA_DETECTED = "insufficient_data_detected"
     MODEL_PROMOTED = "model_promoted"

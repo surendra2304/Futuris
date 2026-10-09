@@ -13,6 +13,7 @@ from futuris.api.deps import (
     get_forecast_repo,
     get_outcome_repo,
 )
+from futuris.api.errors import FuturisAPIError
 from futuris.core.engine import ForecastEngine
 from futuris.core.enums import (
     ConfidenceLevel,
@@ -76,9 +77,25 @@ class ForecastCreateRequest(BaseModel):
 
     target: str = Field(
         ...,
+        min_length=1,
+        max_length=255,
         description="Target metric identifier, e.g. service:checkout:capacity_exceedance_24h",
     )
     horizon: str = Field(default="24h", description="Forecast horizon, e.g. '24h', '6h', '30m'")
+
+    @field_validator("target")
+    @classmethod
+    def _validate_target(cls, value: str) -> str:
+        """Reject empty or whitespace-only targets with a 422, not a 500.
+
+        An empty target used to sail through request validation and fail deep
+        inside the engine (the quality gate caught it, but its ValueError
+        surfaced as an opaque 500).
+        """
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("target must not be empty")
+        return cleaned
 
     @field_validator("horizon")
     @classmethod
@@ -109,6 +126,15 @@ class ForecastCreateRequest(BaseModel):
             raise ValueError("as_of is more than a year old; the engine has no data for it.")
         return value
     context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("context")
+    @classmethod
+    def _validate_context(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Reject non-numeric caller estimates here, as a 422."""
+        from futuris.api.validation import validate_context_numeric_keys
+
+        return validate_context_numeric_keys(value)
+
     constraints: dict[str, Any] = Field(default_factory=dict)
     required_confidence: ConfidenceLevel | None = Field(
         default=None, description="Minimum acceptable confidence; abstains with 202 if not met"
@@ -214,7 +240,8 @@ async def create_forecast(
     )
     f = forecasts[0]
 
-    # Validate through quality gate
+    # Validate through quality gate. A gate rejection is a caller-visible 422
+    # with the gate's reasons -- not a ValueError surfacing as a 500.
     gate = ForecastQualityGate()
     env = ForecastEnvelope(
         forecast_id=f.forecast_id,
@@ -230,7 +257,15 @@ async def create_forecast(
         assumptions=list(f.assumptions),
         source="forecast_api",
     )
-    gate.require(env)
+    try:
+        gate.require(env)
+    except ValueError as exc:
+        raise FuturisAPIError(
+            code="quality_gate_rejected",
+            message=f"Forecast failed the quality gate: {exc}",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            details={"gate": "ForecastQualityGate"},
+        ) from exc
 
     # Check Required Confidence Threshold (Abstention Gate)
     if req.required_confidence:
@@ -302,26 +337,36 @@ async def list_forecasts(
     offset: int = Query(0, ge=0),
     forecast_repo: ForecastRepository = Depends(get_forecast_repo),
 ) -> list[ForecastResponse]:
-    """List forecasts with pagination and total count headers."""
+    """List forecasts with pagination and total count headers.
+
+    Filtering and pagination happen in SQL (``list_filtered``/``count_filtered``):
+    ``limit`` bounds the rows the database returns instead of slicing a fully
+    loaded table in Python.
+    """
     _ = user
-    items = await forecast_repo.list_by_status(status) if status else []
-    if not status:
-        if target:
-            items = await forecast_repo.list_by_target(target)
-        else:
-            items = await forecast_repo.list_by_status(ForecastStatus.ACTIVE)
+    # Filter semantics preserved from the original route: an explicit status
+    # wins over target; with neither, the listing shows active forecasts.
+    effective_status = status if status is not None else (None if target else ForecastStatus.ACTIVE)
+    effective_target = target if status is None else None
 
-    if as_of_after:
-        items = [i for i in items if i.as_of >= as_of_after]
-    if as_of_before:
-        items = [i for i in items if i.as_of <= as_of_before]
-
-    total_count = len(items)
+    items = await forecast_repo.list_filtered(
+        target=effective_target,
+        status=effective_status,
+        as_of_after=as_of_after,
+        as_of_before=as_of_before,
+        limit=limit,
+        offset=offset,
+    )
+    total_count = await forecast_repo.count_filtered(
+        target=effective_target,
+        status=effective_status,
+        as_of_after=as_of_after,
+        as_of_before=as_of_before,
+    )
     response.headers["X-Total-Count"] = str(total_count)
     response.headers["X-Limit"] = str(limit)
     response.headers["X-Offset"] = str(offset)
 
-    sliced = items[offset : offset + limit]
     return [
         ForecastResponse(
             forecast_id=i.forecast_id,
@@ -346,7 +391,7 @@ async def list_forecasts(
             prediction_is_not_authorization=i.prediction_is_not_authorization,
             executable_commands=i.executable_commands,
         )
-        for i in sliced
+        for i in items
     ]
 
 
@@ -402,7 +447,20 @@ async def invalidate_forecast(
     if not f:
         raise HTTPException(status_code=404, detail="Forecast not found")
 
-    updated = await forecast_repo.update_status(forecast_id, ForecastStatus.INVALIDATED)
+    # Only a live forecast can be invalidated. In particular a RESOLVED
+    # forecast keeps its outcome: flipping it to "invalidated" would leave the
+    # outcome row claiming a resolution the forecast no longer reports.
+    updated = await forecast_repo.transition_status(
+        forecast_id, {ForecastStatus.ACTIVE, ForecastStatus.DRAFT}, ForecastStatus.INVALIDATED
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Forecast {forecast_id} is '{f.status.value}' and cannot be invalidated; "
+                "only active or draft forecasts can be invalidated."
+            ),
+        )
     event = ForecastEvent(
         event_id=uuid4(),
         forecast_id=forecast_id,
@@ -483,6 +541,18 @@ async def resolve_manual(
     f = await forecast_repo.get(forecast_id)
     if not f:
         raise HTTPException(status_code=404, detail="Forecast not found")
+
+    # Ground truth can only be recorded against a live forecast. Resolving an
+    # invalidated or cancelled forecast would manufacture an outcome for a
+    # prediction the platform had already withdrawn.
+    if f.status not in (ForecastStatus.ACTIVE, ForecastStatus.DRAFT):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Forecast {forecast_id} is '{f.status.value}' and cannot be resolved; "
+                "only active or draft forecasts accept outcomes."
+            ),
+        )
 
     existing = await outcome_repo.get_by_forecast(forecast_id)
     if existing is not None:

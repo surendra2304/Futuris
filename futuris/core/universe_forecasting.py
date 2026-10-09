@@ -56,15 +56,24 @@ async def generate_universe_forecast(
     * the caller supplies the estimate (``context.point_estimate`` /
       ``context.current_value`` / ``context.probability``) -- the number is
       echoed back and marked ``synthetic`` with the caller named as the source;
-    * nobody supplies one -- the forecasting pipeline computes a number from the
-      configured telemetry generator and the forecast is marked ``synthetic``
-      with that generator named as the source.
+    * nobody supplies one and the target is a pipeline target (a capacity
+      series this deployment actually measures) -- the forecasting pipeline
+      computes a number and the forecast is marked ``synthetic`` with the
+      generator named as the source.
 
-    When neither path can produce a number the forecast is returned in
-    ``insufficient_data`` status with the reason recorded, never a placeholder
-    value standing in for a forecast.
+    Every other target has no telemetry source in this deployment, so without
+    caller context the forecast is returned in ``insufficient_data`` status
+    with the reason recorded -- never a demand number relabelled as a failure
+    rate, and never a placeholder value standing in for a forecast.
     """
-    spec = get_target_spec(target)
+    try:
+        # Strict: an unregistered target is refused before any outbound lookup or
+        # write. Resolving it permissively would forecast against a spec invented
+        # from the target's name (the public route already validates; this guards
+        # every other caller).
+        spec = get_target_spec(target, strict=True)
+    except KeyError as exc:
+        raise ValueError(f"not a registered universe target: {target!r}") from exc
     now = datetime.now(UTC)
     ctx = dict(context or {})
 
@@ -73,9 +82,20 @@ async def generate_universe_forecast(
     supplied = _caller_supplied_values(ctx)
     if supplied.must_emit:
         forecast = _forecast_from_caller_context(spec, supplied, ctx, now, intelx_findings)
-    else:
+    elif spec.pipeline_target:
         forecast = await _forecast_from_pipeline(
             spec, target, now, intelx_findings, model_budget_seconds=model_budget_seconds
+        )
+    else:
+        forecast = _insufficient_data_forecast(
+            spec,
+            now,
+            error=RuntimeError(
+                f"target '{target}' has no configured telemetry pipeline in this "
+                "deployment; supply context.point_estimate/current_value/probability "
+                "or register a telemetry connector for it"
+            ),
+            intelx_findings=intelx_findings,
         )
 
     if session is not None:
