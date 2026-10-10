@@ -24,6 +24,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import TimeoutError as SQLATimeoutError
 
 from futuris.infra.logging import get_logger
 
@@ -214,6 +215,7 @@ def register_error_handlers(app: FastAPI) -> None:
         }
         return JSONResponse(
             status_code=exc.status_code,
+            headers=exc.headers,
             content={
                 "error": {
                     "code": code_map.get(exc.status_code, "http_error"),
@@ -225,17 +227,52 @@ def register_error_handlers(app: FastAPI) -> None:
             },
         )
 
+    @app.exception_handler(SQLATimeoutError)
+    async def pool_timeout_handler(request: Request, exc: SQLATimeoutError) -> JSONResponse:
+        """Map a database pool checkout timeout onto an actionable 503.
+
+        A pool timeout means the server is at its concurrency ceiling, not that
+        anything is broken: the client should back off and retry, and the
+        response must say so rather than surfacing as an opaque 500.
+        """
+        _ = request
+        logger.error("pool_timeout", error=str(exc)[:300])
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "code": "server_busy",
+                    "message": (
+                        "The server is at its database concurrency limit. "
+                        "Retry shortly."
+                    ),
+                    "details": {"remediation": "retry with backoff; reduce concurrency"},
+                }
+            },
+        )
+
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        _ = request
-        logger.error("unhandled_exception", error=type(exc).__name__, detail=str(exc)[:400])
+        # The exception detail (driver messages, file paths, library internals)
+        # is logged for the operator but never returned to the client: an
+        # unhandled error is exactly the moment an API must not leak internals.
+        logger.error(
+            "unhandled_exception",
+            error=type(exc).__name__,
+            detail=str(exc)[:400],
+            request_id=request.headers.get("X-Request-ID"),
+        )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "error": {
                     "code": "internal_server_error",
                     "message": "An unexpected internal error occurred",
-                    "details": str(exc)[:MAX_DETAIL_CHARS],
+                    "details": {
+                        "error_type": type(exc).__name__,
+                        "request_id": request.headers.get("X-Request-ID"),
+                        "remediation": "check server logs for the request id",
+                    },
                 }
             },
         )

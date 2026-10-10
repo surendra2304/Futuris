@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from sqlalchemy import event as sa_event
+from sqlalchemy import pool
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -60,7 +61,24 @@ if "sqlite" in settings.DATABASE_URL:
     # under an 8-way concurrent fuzz run, this was the difference between 503s
     # from the storage-error mapper and no storage errors at all.
     engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30.0}
+    # SQLite connections are cheap file handles, and a request-scoped session
+    # holds its connection for the whole request -- including the multi-second
+    # pipeline computation. A fixed QueuePool (default size 5 + overflow 10)
+    # exhausts under a concurrent forecast storm and every excess request
+    # failed with ``QueuePool limit ... reached`` 500s (measured: 15 of 30
+    # concurrent FRIDAY delegations). NullPool gives every session its own
+    # connection and closes it on return, so the pool can never be the reason
+    # a request fails; SQLite's own WAL + busy-timeout serialises writers.
+    engine_kwargs["poolclass"] = pool.NullPool
 else:
+    # PostgreSQL: size the pool for a burst of concurrent forecast requests
+    # (each holds a session across its pipeline run), recycle stale
+    # connections, and fail fast with a ping when a connection was idle too
+    # long. Pool checkout timeouts are mapped to 503 by the API error layer.
+    engine_kwargs["pool_size"] = 10
+    engine_kwargs["max_overflow"] = 20
+    engine_kwargs["pool_timeout"] = 15
+    engine_kwargs["pool_recycle"] = 1800
     engine_kwargs["pool_pre_ping"] = True
 
 engine: AsyncEngine = create_async_engine(

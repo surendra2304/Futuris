@@ -71,6 +71,18 @@ class BaseStatsForecastAdapter:
         else:
             self.residuals = np.array([0.0])
 
+    def _interval_floor(self) -> float:
+        """Lower bound for intervals: 0 when the series is non-negative.
+
+        Demand, rates and counts cannot go below zero, but a residual-std
+        interval around a small mean goes deeply negative (a forecast of 1285
+        rpm was served with a lower bound of -5700). A calibrated platform must
+        not hand operators impossible intervals.
+        """
+        if self.y_history is not None and len(self.y_history) > 0:
+            return 0.0 if bool(np.all(self.y_history >= 0)) else float("-inf")
+        return float("-inf")
+
     def _build_prediction(
         self,
         point_forecast: np.ndarray,
@@ -79,11 +91,12 @@ class BaseStatsForecastAdapter:
     ) -> ModelPrediction:
         std_res = float(np.std(self.residuals)) if len(self.residuals) > 0 else 0.0
         z_90 = 1.645  # 90% prediction interval
+        floor = self._interval_floor()
 
         intervals: list[PredictionIntervals] = []
         for i, val in enumerate(point_forecast):
             step_scale = np.sqrt(i + 1)
-            step_lower = float(val - (z_90 * std_res * step_scale))
+            step_lower = max(floor, float(val - (z_90 * std_res * step_scale)))
             step_upper = float(val + (z_90 * std_res * step_scale))
             intervals.append(
                 PredictionIntervals(
@@ -280,6 +293,7 @@ class MeanEnsembleAdapter:
         self.snaive_adapter = SeasonalNaiveAdapter(season_length=season_length)
         self.residuals: np.ndarray = np.array([])
         self.as_of: datetime | None = None
+        self.y_history: np.ndarray | None = None
 
     @property
     def name(self) -> str:
@@ -294,6 +308,7 @@ class MeanEnsembleAdapter:
 
     def fit(self, x: pd.DataFrame, y: pd.Series, as_of: datetime) -> "MeanEnsembleAdapter":
         self.as_of = as_of
+        self.y_history = y.to_numpy(dtype=float)
         self.ets_adapter.fit(x, y, as_of)
         self.snaive_adapter.fit(x, y, as_of)
         r_ets = self.ets_adapter.residuals
@@ -319,7 +334,16 @@ class MeanEnsembleAdapter:
         p_snaive = self.snaive_adapter.predict(horizon, capacity_threshold, probability_method)
 
         avg_point = 0.5 * (np.array(p_ets.point_forecast) + np.array(p_snaive.point_forecast))
-        range_lower = min(p_ets.range_lower, p_snaive.range_lower)
+        # Clamp at zero for non-negative series, same rule as the single-model
+        # adapters: pooling two wide intervals must not produce an impossible
+        # negative lower bound.
+        if self.y_history is not None and len(self.y_history) > 0 and bool(
+            np.all(self.y_history >= 0)
+        ):
+            floor = 0.0
+        else:
+            floor = float("-inf")
+        range_lower = max(floor, min(p_ets.range_lower, p_snaive.range_lower))
         range_upper = max(p_ets.range_upper, p_snaive.range_upper)
         central = float(np.mean(avg_point))
 
@@ -327,7 +351,7 @@ class MeanEnsembleAdapter:
         for int_e, int_s in zip(p_ets.intervals, p_snaive.intervals, strict=True):
             intervals.append(
                 PredictionIntervals(
-                    lower=min(int_e.lower, int_s.lower),
+                    lower=max(floor, min(int_e.lower, int_s.lower)),
                     central=0.5 * (int_e.central + int_s.central),
                     upper=max(int_e.upper, int_s.upper),
                 )

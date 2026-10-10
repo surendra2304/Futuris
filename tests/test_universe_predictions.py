@@ -11,8 +11,14 @@ ANALYST_HEADERS = {"X-API-Key": "universe_test_key_0123456789abcdefghij"}
 
 
 @pytest.fixture(autouse=True)
-def _configure_master_key(monkeypatch):
-    """Register the analyst key used by these tests as the master credential."""
+def _configure_master_key(monkeypatch, ready_storage):
+    """Register the analyst key and isolate storage for these tests.
+
+    These tests run the real application lifespan. Without ``ready_storage`` they
+    opened the workspace database that a running server also holds open, and
+    intermittently received 503 ``storage_busy`` from SQLite lock contention. A
+    test must control the database it asserts on (see ``tests/conftest.py``).
+    """
     from futuris.infra.config import settings
 
     monkeypatch.setattr(settings, "FUTURIS_API_KEY", ANALYST_HEADERS["X-API-Key"])

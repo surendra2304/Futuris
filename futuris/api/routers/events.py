@@ -5,10 +5,12 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from futuris.api.deps import get_event_emitter, get_event_repo
+from futuris.api.deps import get_db_session, get_event_emitter, get_event_repo
 from futuris.core.enums import ForecastEventType
 from futuris.core.schemas import ForecastEvent
+from futuris.infra.audit import AuditLogger
 from futuris.infra.auth import RequireAnalyst, RequireViewer
 from futuris.infra.events import (
     EventEmitter,
@@ -70,9 +72,9 @@ async def create_webhook(
     req: WebhookCreateRequest,
     user: RequireAnalyst,
     emitter: EventEmitter = Depends(get_event_emitter),
+    session: AsyncSession = Depends(get_db_session),
 ) -> WebhookCreatedResponse:
     """Register webhook subscription and return HMAC-SHA256 signature secret ONCE."""
-    _ = user
     # Fail closed on SSRF-shaped targets before storing the subscription.
     try:
         assert_safe_webhook_url(req.url)
@@ -89,6 +91,16 @@ async def create_webhook(
         secret=secret,
     )
     emitter.register_subscription(sub)
+
+    # Webhook registration is a mutation of platform state: it belongs in the
+    # append-only audit trail like every other mutating action.
+    await AuditLogger(session).log_mutation(
+        actor_label=user.label,
+        action="create_webhook",
+        entity="webhook_subscription",
+        entity_id=str(sub_id),
+        payload={"url": req.url, "event_types": [e.value for e in req.event_types]},
+    )
 
     return WebhookCreatedResponse(
         subscription_id=sub_id,
@@ -107,12 +119,19 @@ async def delete_webhook(
     subscription_id: UUID,
     user: RequireAnalyst,
     emitter: EventEmitter = Depends(get_event_emitter),
+    session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    _ = user  # auth dependency; identity handled by the role guard
     """Remove a webhook subscription."""
     for sub in list(emitter.subscriptions):
         if sub.subscription_id == subscription_id:
             emitter.subscriptions.remove(sub)
+            await AuditLogger(session).log_mutation(
+                actor_label=user.label,
+                action="delete_webhook",
+                entity="webhook_subscription",
+                entity_id=str(subscription_id),
+                payload={"url": sub.url},
+            )
             return
 
     raise HTTPException(status_code=404, detail="Webhook subscription not found")

@@ -70,7 +70,12 @@ class ForecastModel(Base):
     model_metadata: Mapped[dict] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
     )
-    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Unique via ix_forecasts_idempotency_key below (not merely indexed): the
+    # FRIDAY delegation path is idempotent on this key, and the unique index is
+    # what makes a concurrent retry storm produce exactly one forecast instead
+    # of N duplicates. Both SQLite and Postgres allow any number of NULLs
+    # under a unique index.
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Provenance labels.  They were domain-only fields for a long time, so a
     # forecast built from live Stratex telemetry read back as ``synthetic``
     # after a round trip: the served label contradicted the stored evidence.
@@ -96,6 +101,7 @@ class ForecastModel(Base):
     __table_args__ = (
         Index("ix_forecasts_target_as_of", "target", "as_of"),
         Index("ix_forecasts_status", "status"),
+        Index("ix_forecasts_idempotency_key", "idempotency_key", unique=True),
     )
 
 

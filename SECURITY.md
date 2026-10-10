@@ -22,4 +22,13 @@ Statistical model adapters must pass strict non-inferiority validation before se
 - **Viewer**: Read-only access to `/v1/forecasts`, `/v1/evaluation`, and `/ui`.
 - **Analyst**: Create forecasts, execute counterfactual scenarios, run backtests, and perform manual ground-truth resolutions.
 - **Admin**: System governance, API key management, model promotions, and audit log inspection (`GET /v1/audit`).
-- **Append-Only Audit Log**: Every mutating API action logs the actor identity, action type, entity identifier, and SHA-256 payload hash.
+- **Append-Only Audit Log**: Mutating API actions write a row with the actor identity, action type, entity identifier, and SHA-256 payload hash. Anonymous reads that persist forecasts are recorded under the actor `anonymous_read` (the universe matrix backfill). Analyst refreshes, explicit self-healing passes (`POST /v1/self/heal`; the background loop is not recorded) and peer-circuit resets are also recorded. Known gaps are listed in `REPO_ANALYSIS.md` §12 and are not claimed here.
+
+## 5. Request Budgets, Transport and Browser Headers
+- **Anonymous budget (per client address, per process).** Requests without an API key share a budget of 120 per minute (`ANONYMOUS_READ_RATE_LIMIT_PER_MINUTE`). The routes that compute or persist forecasts (`GET /v1/futuris/forecast`, `GET /v1/market/forecast`, `GET /v1/predictions/matrix`) have a budget of 6 per minute (`ANONYMOUS_HEAVY_READ_RATE_LIMIT_PER_MINUTE`). When a budget is spent the response is `429` with a `Retry-After` header. Authenticated callers are not charged against it.
+- **Limits of the budget.** It is held in process memory, so every replica has its own budget. Multi-replica deployments need a shared store before the budget means what it says.
+- **`TRUST_PROXY_HEADERS` (default `false`).** When enabled, the client address is the rightmost `X-Forwarded-For` entry, which is the one the nearest proxy appended. Enable it only behind a proxy that appends to that header. Otherwise clients can choose their own address and escape the budget.
+- **Headers on every response:** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` denying camera, microphone and geolocation.
+- **Content-Security-Policy on `/ui` only.** The console is a single same-origin module script with no inline script and no external stylesheet. Swagger UI on `/docs` loads its assets from a CDN and is therefore outside the policy.
+- **`Strict-Transport-Security` in production only.** Development runs over plain HTTP, and HSTS there would pin browsers to an origin that does not serve TLS.
+- **Documentation surface.** `/docs`, `/redoc` and `/openapi.json` are served outside production. Production disables them unless `DOCS_ENABLED=true` is set explicitly.

@@ -13,11 +13,12 @@ that was always healthy from one that keeps repairing itself.
 """
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 
 from futuris.core.enums import EvidenceClass
 from futuris.infra.config import settings
@@ -30,6 +31,18 @@ from futuris.storage.db import async_session_factory, engine, ensure_storage_dir
 logger = get_logger("futuris.infra.self_healing")
 
 HEALTH_STATES = ("ok", "degraded", "down", "unconfigured", "unknown")
+
+#: Total wall-clock budget for one self-status measurement. /v1/self/status is
+#: the liveness endpoint the mesh polls constantly, so it must answer even
+#: while a forecast fit saturates the CPU: checks that cannot finish inside
+#: the budget report ``unknown`` instead of stalling the answer.
+STATUS_MEASUREMENT_BUDGET_SECONDS = 3.0
+
+#: How long an assembled status payload may be served from cache. Repeated
+#: polls (the UI refreshes every 45s, harnesses poll continuously) become
+#: instant; the payload keeps the ``checked_at`` of its measurement, so a
+#: cached answer never claims to be fresher than it is.
+STATUS_CACHE_SECONDS = 2.0
 
 
 @dataclass
@@ -60,6 +73,7 @@ class SelfHealingSupervisor:
     def __init__(self) -> None:
         self.healing_history: list[dict[str, Any]] = []
         self.max_history = 200
+        self._status_cache: tuple[float, Any, dict[str, Any]] | None = None
 
     # ── measurement ────────────────────────────────────────────────────────
 
@@ -199,8 +213,17 @@ class SelfHealingSupervisor:
             data={"subscriptions": [s.target for s in scheduler.subscriptions]},
         )
 
-    async def check_integrity(self) -> SubsystemCheck:
-        """Report whether served evidence hashes are real and verifiable."""
+    async def check_integrity(self, *, sample_limit: int = 200) -> SubsystemCheck:
+        """Report whether served evidence hashes are real and verifiable.
+
+        The check samples the most recent ``sample_limit`` evidence rows rather
+        than scanning the whole table: /v1/self/status is the liveness endpoint
+        the mesh polls constantly, and an unbounded scan grows with the number
+        of forecasts until the endpoint starves the event loop under load
+        (measured: an 8.1s liveness stall behind a concurrent forecast burst).
+        The sample is reported alongside the verdict so the answer says what it
+        actually measured.
+        """
         from sqlalchemy import select
 
         from futuris.core.hashing import is_real_hash
@@ -208,7 +231,16 @@ class SelfHealingSupervisor:
 
         try:
             async with async_session_factory() as session:
-                rows = (await session.execute(select(EvidenceRefModel))).scalars().all()
+                total = (
+                    await session.execute(select(func.count(EvidenceRefModel.evidence_id)))
+                ).scalar_one()
+                rows = (
+                    await session.execute(
+                        select(EvidenceRefModel)
+                        .order_by(EvidenceRefModel.as_of.desc())
+                        .limit(sample_limit)
+                    )
+                ).scalars().all()
         except Exception as exc:
             return SubsystemCheck(
                 name="evidence_integrity",
@@ -231,25 +263,35 @@ class SelfHealingSupervisor:
             return SubsystemCheck(
                 name="evidence_integrity",
                 state="down",
-                detail=f"{len(invalid)}/{len(rows)} evidence hashes are not real digests",
+                detail=(
+                    f"{len(invalid)}/{len(rows)} sampled evidence hashes are not real digests"
+                ),
                 evidence_class=EvidenceClass.LIVE.value,
-                data={"invalid_evidence_ids": invalid[:10], "evidence_refs": len(rows)},
+                data={
+                    "invalid_evidence_ids": invalid[:10],
+                    "evidence_refs_total": total,
+                    "evidence_refs_sampled": len(rows),
+                },
             )
         return SubsystemCheck(
             name="evidence_integrity",
             state="ok",
-            detail=f"all {len(rows)} evidence hashes are real SHA-256 digests",
+            detail=(
+                f"all {len(rows)} sampled evidence hashes are real SHA-256 digests"
+                + (f" (of {total} total)" if total > len(rows) else "")
+            ),
             evidence_class=EvidenceClass.LIVE.value,
-            data={"evidence_refs": len(rows)},
+            data={
+                "evidence_refs_total": total,
+                "evidence_refs_sampled": len(rows),
+            },
         )
 
     async def check_agent_loop(self) -> SubsystemCheck:
         """Report whether the multi-agent surface is reachable in this process."""
-        from futuris.api.app import app
+        from futuris.api.app import app, iter_route_paths
 
-        routes = {
-            path for route in app.routes if (path := getattr(route, "path", None)) is not None
-        }
+        routes = iter_route_paths(app)
         required = {
             "/v1/friday/forecast",
             "/v1/friday/delegate",
@@ -354,17 +396,75 @@ class SelfHealingSupervisor:
 
     # ── reporting ──────────────────────────────────────────────────────────
 
-    async def status(self) -> dict[str, Any]:
-        """Measure everything, heal what is broken, and report both."""
-        checks = [
-            await self.check_database(),
-            await self.check_tables(),
-            await self.check_integrity(),
-            self.check_scheduler(),
-            self.check_peers(),
-            await self.check_outbound_delivery(),
-            await self.check_agent_loop(),
-        ]
+    async def status(self, *, force: bool = False) -> dict[str, Any]:
+        """Measure everything, heal what is broken, and report both.
+
+        Bounded and cached. This is the endpoint the mesh polls for liveness,
+        so it must answer promptly even while a forecast fit saturates the
+        CPU: the measurement runs under a total wall-clock budget, a check
+        that cannot finish in time reports ``unknown`` rather than stalling
+        the answer, and the assembled payload is cached briefly so repeated
+        polls are instant.
+
+        ``force=True`` bypasses the cache: an explicit healing pass must
+        actually measure and actually heal, never replay a recent answer
+        (B19). The cache exists for pollers, not for operators.
+        """
+        now = time.monotonic()
+        cached = self._status_cache
+        # A cached payload only answers for the engine it was measured against:
+        # a payload about one database must never answer for another. The
+        # supervisor is process-wide and the test suite swaps its engine per
+        # test; production has exactly one engine, so this is a no-op there.
+        if not force and cached is not None and now < cached[0] and cached[1] is engine:
+            return cached[2]
+        payload = await self._measure()
+        self._status_cache = (time.monotonic() + STATUS_CACHE_SECONDS, engine, payload)
+        return payload
+
+    async def _measure(self) -> dict[str, Any]:
+        """Run every subsystem check inside the measurement budget."""
+        deadline = time.monotonic() + STATUS_MEASUREMENT_BUDGET_SECONDS
+        checks: list[SubsystemCheck] = []
+
+        async def run_timed(name: str, coro) -> None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                checks.append(
+                    SubsystemCheck(
+                        name=name,
+                        state="unknown",
+                        detail="not measured: status budget exhausted under load",
+                        evidence_class=EvidenceClass.LIVE.value,
+                    )
+                )
+                # The check is skipped, so its coroutine must be closed here; otherwise
+                # Python reports "coroutine ... was never awaited" at garbage collection.
+                coro.close()
+                return
+            try:
+                checks.append(await asyncio.wait_for(coro, timeout=remaining))
+            except TimeoutError:
+                checks.append(
+                    SubsystemCheck(
+                        name=name,
+                        state="unknown",
+                        detail=(
+                            "check did not finish within the status budget under load; "
+                            "unknown, not down"
+                        ),
+                        evidence_class=EvidenceClass.LIVE.value,
+                    )
+                )
+
+        await run_timed("database", self.check_database())
+        await run_timed("schema", self.check_tables())
+        await run_timed("evidence_integrity", self.check_integrity())
+        # The scheduler and peer-circuit checks are in-memory and fast.
+        checks.append(self.check_scheduler())
+        checks.append(self.check_peers())
+        await run_timed("outbound_webhooks", self.check_outbound_delivery())
+        await run_timed("agent_surface", self.check_agent_loop())
         actions = await self.heal(checks)
 
         # Anything healed in this pass changes the reported state, so measure
@@ -421,7 +521,9 @@ async def self_healing_loop(interval_seconds: float = 60.0) -> None:
     while True:
         try:
             await asyncio.sleep(interval_seconds)
-            report = await self_healing_supervisor.status()
+            # force=True: the loop exists to heal, so it must never skip a
+            # pass just because a liveness poll refreshed the cache (B19).
+            report = await self_healing_supervisor.status(force=True)
             logger.info(
                 "self_assessment",
                 status=report["status"],

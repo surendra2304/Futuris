@@ -309,9 +309,8 @@ async def test_unconfigured_friday_key_says_unconfigured(
 ) -> None:
     monkeypatch.setattr(settings, "FUTURIS_FRIDAY_API_KEY", None)
     monkeypatch.setattr(settings, "FUTURIS_API_KEY", None)
-    monkeypatch.delenv("FUTURIS_FRIDAY_API_KEY", raising=False)
-    monkeypatch.delenv("FRIDAY_API_KEY", raising=False)
-    monkeypatch.delenv("FUTURIS_API_KEY", raising=False)
+    monkeypatch.setattr(settings, "FUTURIS_FRIDAY_API_KEY", None)
+    monkeypatch.setattr(settings, "FUTURIS_API_KEY", None)
     response = await client.post(
         "/v1/friday/forecast", json={"friday_request_id": "req_unconfigured", "target": "x"}
     )

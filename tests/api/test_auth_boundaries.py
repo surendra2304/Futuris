@@ -148,7 +148,9 @@ async def test_inbound_research_webhook_requires_the_shared_secret(
     anon_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ):
     secret = "intelx_webhook_secret_0123456789abcdef"
-    monkeypatch.setenv("INTELX_WEBHOOK_API_KEY", secret)
+    from futuris.infra.config import settings
+
+    monkeypatch.setattr(settings, "INTELX_WEBHOOK_API_KEY", secret)
 
     payload = {
         "event": "research_finding_relevant",

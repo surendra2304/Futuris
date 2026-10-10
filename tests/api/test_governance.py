@@ -223,4 +223,7 @@ async def test_duplicate_manual_resolution_is_a_conflict(client: httpx.AsyncClie
 
     second = await client.post(f"/v1/forecasts/{forecast_id}/resolve-manual", json=body)
     assert second.status_code == 409, second.text
-    assert "already has an outcome" in second.text
+    # The conflict is reported by whichever guard sees it first: the outcome
+    # uniqueness pre-check, or the lifecycle guard that refuses to resolve a
+    # forecast that is no longer live.
+    assert "already has an outcome" in second.text or "cannot be resolved" in second.text

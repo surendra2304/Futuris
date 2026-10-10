@@ -5,11 +5,15 @@ from typing import Any
 
 import httpx
 
-from futuris.connectors.base import BaseConnector, Observation
+from futuris.connectors.base import BaseConnector, Observation, warn_if_default_credential
 from futuris.core.enums import SignalClass
 from futuris.infra.logging import get_logger
 
 logger = get_logger("futuris.connectors.forge")
+
+#: Public placeholder, kept only so existing constructions keep working; using
+#: it is logged loudly (see warn_if_default_credential).
+FORGE_DEFAULT_KEY = "forge_default_secret_key"
 
 
 class ForgeConnector(BaseConnector):
@@ -23,9 +27,10 @@ class ForgeConnector(BaseConnector):
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or "forge_default_secret_key"
+        self.api_key = api_key or FORGE_DEFAULT_KEY
         self.timeout_seconds = timeout_seconds
         self.transport = transport
+        warn_if_default_credential("forge", self.api_key, FORGE_DEFAULT_KEY, logger)
 
     async def fetch(self, start: datetime, end: datetime) -> list[Observation]:
         """Fetch Forge observations across [start, end]."""

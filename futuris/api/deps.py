@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from futuris.api.errors import FuturisAPIError
 from futuris.core.lifecycle import LifecycleManager
 from futuris.infra.events import EventEmitter, event_emitter
-from futuris.storage.db import async_session_factory, safe_rollback
+from futuris.storage import db as storage_db
+from futuris.storage.db import safe_rollback
 from futuris.storage.repositories import (
     EventRepository,
     ForecastRepository,
@@ -36,7 +37,9 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     always able to finish), and a session that cannot commit raises an explicit
     storage error rather than reporting a false success.
     """
-    async with async_session_factory() as session:
+    # Resolved at call time: a request session must use the process's current
+    # storage factory, not the one that existed when this module was imported (B23).
+    async with storage_db.async_session_factory() as session:
         try:
             yield session
         except Exception:

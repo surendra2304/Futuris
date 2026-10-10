@@ -4,6 +4,7 @@ import {
   Layers3, Menu, Radio, RefreshCw, ShieldAlert, Sparkles,
 } from 'lucide-react';
 import { fetchForecasts, fetchHealth, fetchPeers } from './api/client';
+import { countProvenance } from './utils/provenance';
 import { EcosystemOverview, Forecast } from './api/types';
 
 type Health = { status: string; version: string };
@@ -67,7 +68,11 @@ function App() {
     })),
   ];
   const onlineCount = services.filter((item) => item.status === 'online').length;
-  const verifiedForecastCount = 0;
+  // The API labels every forecast with its evidence class: live/derived numbers
+  // are measured or computed from persisted records; synthetic/demo numbers are
+  // generated or caller-supplied. Verified = measured, not "withheld".
+  const list = forecasts.data ?? [];
+  const { measured: verifiedForecastCount, synthetic: syntheticCount } = countProvenance(list);
 
   return (
     <div className="console-shell">
@@ -101,8 +106,8 @@ function App() {
 
           <section className="metric-grid" aria-label="Current service summary">
             <article className="metric-card metric-primary"><div className="metric-top"><span>Services responding</span><span className="metric-icon"><Radio size={16} /></span></div><div className="metric-value">{peers.loading || health.loading || peers.error ? '—' : `${onlineCount}`}<small> / 9</small></div><div className="metric-foot"><span className="metric-status"><i />{peers.error ? 'Peer probe data unavailable' : peers.loading ? 'Probing services' : `${9 - onlineCount} not confirmed online`}</span><span className="metric-arrow"><ArrowUpRight size={15} /></span></div></article>
-            <article className="metric-card"><div className="metric-top"><span>Verified forecasts</span><span className="metric-icon accent-blue"><Activity size={16} /></span></div><div className="metric-value">{forecasts.loading ? '—' : verifiedForecastCount}</div><div className="metric-foot"><span>Live provenance not exposed by API</span><ArrowDownRight className="muted-arrow" size={15} /></div></article>
-            <article className="metric-card"><div className="metric-top"><span>Active forecast records</span><span className="metric-icon accent-violet"><Layers3 size={16} /></span></div><div className="metric-value">{forecasts.loading ? '—' : forecasts.data?.length ?? '—'}</div><div className="metric-foot"><span>Count only · values withheld until verified</span><span className="unverified-mark">Unverified</span></div></article>
+            <article className="metric-card"><div className="metric-top"><span>Verified forecasts</span><span className="metric-icon accent-blue"><Activity size={16} /></span></div><div className="metric-value">{forecasts.loading ? '—' : verifiedForecastCount}</div><div className="metric-foot"><span>Measured (live/derived) evidence class</span><ArrowDownRight className="muted-arrow" size={15} /></div></article>
+            <article className="metric-card"><div className="metric-top"><span>Active forecast records</span><span className="metric-icon accent-violet"><Layers3 size={16} /></span></div><div className="metric-value">{forecasts.loading ? '—' : forecasts.data?.length ?? '—'}</div><div className="metric-foot"><span>{syntheticCount} synthetic/demo · labelled per record</span><span className="unverified-mark">Labelled</span></div></article>
             <article className="metric-card"><div className="metric-top"><span>IntelX feed</span><span className="metric-icon accent-amber"><ShieldAlert size={16} /></span></div><div className="metric-value metric-word">Not exposed</div><div className="metric-foot"><span>No read-only news route in Futuris API</span><ArrowDownRight className="muted-arrow" size={15} /></div></article>
           </section>
 
@@ -126,7 +131,18 @@ function App() {
             <div className="right-column">
               <article className="panel prediction-panel" id="predictions">
                 <div className="panel-header"><div><div className="panel-kicker">FORECAST WORKSPACE</div><h2>Prediction integrity</h2></div><span className="integrity-icon"><Gauge size={17} /></span></div>
-                {forecasts.loading && !forecasts.data ? <div className="loading-state compact"><span className="loader" />Checking forecast records…</div> : forecasts.error ? <EmptyPanel title="Forecast API unavailable" detail={forecasts.error} icon={Activity} /> : <div className="notice-block"><div className="notice-title"><ShieldAlert size={16} />Forecast values are withheld</div><p>The API returns forecast records but does not identify whether their telemetry is live or demo data. Futuris also has a baseline generator that emits fixed estimates. This console will show values only after the API provides verifiable input provenance.</p><div className="notice-count">{forecasts.data?.length ?? 0} stored record{forecasts.data?.length === 1 ? '' : 's'} returned · {verifiedForecastCount} verified</div></div>}
+                {forecasts.loading && !forecasts.data ? <div className="loading-state compact"><span className="loader" />Checking forecast records…</div> : forecasts.error ? <EmptyPanel title="Forecast API unavailable" detail={forecasts.error} icon={Activity} /> : list.length === 0 ? <EmptyPanel title="No forecast records yet" detail="Create a forecast through the API or run the demo seed to populate the workspace." icon={Activity} /> : <div className="forecast-preview-list">
+                  {list.slice(0, 5).map((f) => (
+                    <div className="forecast-preview-row" key={f.forecast_id}>
+                      <div className="forecast-preview-main">
+                        <span className="forecast-preview-target">{f.target}</span>
+                        <span className="forecast-preview-value">{f.prediction.toFixed(1)} <small>[{f.range.lower.toFixed(0)} – {f.range.upper.toFixed(0)}]</small></span>
+                      </div>
+                      <span className={`evidence-pill evidence-${f.evidence_class ?? 'synthetic'}`}>{f.evidence_class ?? 'synthetic'}</span>
+                    </div>
+                  ))}
+                  <div className="notice-count">{list.length} record{list.length === 1 ? '' : 's'} · {verifiedForecastCount} measured (live/derived) · {syntheticCount} synthetic/demo — every value is labelled, none is presented as measured unless it is</div>
+                </div>}
               </article>
               <article className="panel research-panel" id="research">
                 <div className="panel-header"><div><div className="panel-kicker">EXOGENOUS SIGNALS</div><h2>IntelX research</h2></div><span className="research-state">Unavailable</span></div>

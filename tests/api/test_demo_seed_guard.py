@@ -36,7 +36,15 @@ def reset_guard() -> None:
 
 
 @pytest_asyncio.fixture
-async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[httpx.AsyncClient, None]:
+async def client(
+    monkeypatch: pytest.MonkeyPatch, ready_storage
+) -> AsyncGenerator[httpx.AsyncClient, None]:
+    """Admin client over an isolated database.
+
+    The seed route writes an audit row, so the client must not share the workspace
+    database with a running server (its writes produced intermittent 503
+    ``storage_busy`` responses, which broke the status checks in this test).
+    """
     monkeypatch.setattr(settings, "FUTURIS_API_KEY", ADMIN_KEY)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(

@@ -9,7 +9,11 @@ from futuris.infra.config import Settings
 
 
 def test_futuris_named_key_is_selected_for_memora(monkeypatch):
-    monkeypatch.delenv("MEMORA_API_KEY", raising=False)
+    # The test must control every variable in the alias chain, not only one of
+    # them: an exported FUTURIS_API_KEY (the master key, also an alias of the
+    # Memora key) would otherwise win over the explicit argument (B22).
+    for name in ("MEMORA_API_KEY", "FUTURIS_MEMORA_API_KEY", "FUTURIS_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
     config = Settings(_env_file=None, FUTURIS_API_KEY="futuris-agent-key")
     assert config.MEMORA_API_KEY == "futuris-agent-key"
 

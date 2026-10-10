@@ -26,6 +26,9 @@ class LifecycleSweepReport:
     invalidated_count: int
     reassessment_due_count: int
     outcomes: list[Outcome]
+    # Forecasts that expired because their resolution raised. Each one carries a
+    # forecast_resolution_failed event with the reason (R12).
+    resolution_failures: int = 0
 
 
 def _ensure_utc(dt: datetime) -> datetime:
@@ -122,6 +125,7 @@ class LifecycleManager:
         resolved_count = 0
         invalidated_count = 0
         recorded_outcomes: list[Outcome] = []
+        resolution_failures = 0
 
         for forecast in active_forecasts:
             f_as_of = _ensure_utc(forecast.as_of)
@@ -164,12 +168,28 @@ class LifecycleManager:
                     await self.event_repo.append(event)
                     await self.emitter.emit(event)
                     resolved_count += 1
-                except Exception:
-                    # Ground truth observations unavailable for resolution; transition to EXPIRED
+                except Exception as exc:
+                    # Usually: the ground-truth observations for the horizon are missing.
+                    # The forecast still expires, but the reason is persisted as a domain
+                    # event. Before, the expiry carried no record of why it happened (R12).
                     await self.forecast_repo.update_status(
                         forecast.forecast_id, ForecastStatus.EXPIRED
                     )
+                    await self.event_repo.append(
+                        ForecastEvent(
+                            event_id=uuid4(),
+                            forecast_id=forecast.forecast_id,
+                            event_type=ForecastEventType.FORECAST_RESOLUTION_FAILED,
+                            payload={
+                                "reason": "resolution_failed",
+                                "error_type": type(exc).__name__,
+                                "error": str(exc)[:500],
+                            },
+                            emitted_at=datetime.now(UTC),
+                        )
+                    )
                     expired_count += 1
+                    resolution_failures += 1
                 continue
 
         review_due = await self.list_due_for_review(now)
@@ -180,4 +200,5 @@ class LifecycleManager:
             invalidated_count=invalidated_count,
             reassessment_due_count=len(review_due),
             outcomes=recorded_outcomes,
+            resolution_failures=resolution_failures,
         )

@@ -43,6 +43,8 @@ export interface Forecast {
   review_at: string;
   status: ForecastStatus;
   created_at?: string;
+  evidence_class?: 'live' | 'derived' | 'synthetic' | 'demo';
+  evidence_source?: string | null;
 }
 
 export interface Outcome {

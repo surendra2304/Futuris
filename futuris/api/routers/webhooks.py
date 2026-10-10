@@ -1,7 +1,6 @@
 """Inbound webhook router receiving research catalysts and external triggers."""
 
 import hmac
-import os
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -36,10 +35,9 @@ def verify_inbound_webhook_auth(
     """
     from futuris.infra.config import settings
 
+    # Settings only (B21): the process environment is not consulted directly.
     expected = (
-        os.getenv("INTELX_WEBHOOK_API_KEY")
-        or os.getenv("FUTURIS_FRIDAY_API_KEY")
-        or os.getenv("FUTURIS_API_KEY")
+        settings.INTELX_WEBHOOK_API_KEY
         or settings.FUTURIS_FRIDAY_API_KEY
         or settings.FUTURIS_API_KEY
     )

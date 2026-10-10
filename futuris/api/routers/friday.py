@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from futuris.api.deps import get_db_session, get_event_repo, get_outcome_repo
@@ -29,6 +30,7 @@ from futuris.features.normalize import (
 from futuris.infra.audit import AuditLogger
 from futuris.infra.auth import AuthUser
 from futuris.infra.config import settings
+from futuris.infra.logging import get_logger
 from futuris.infra.research_context import fetch_research_reports, finding_labels
 from futuris.scenarios.engine import ScenarioEngine
 from futuris.scenarios.spec import ScenarioSpec
@@ -43,6 +45,8 @@ from futuris.upgrade.rate_limit import InMemoryRateLimitBackend
 
 router = APIRouter(prefix="/v1/friday", tags=["FRIDAY Delegation"])
 
+logger = get_logger("futuris.api.friday")
+
 #: Minimum accepted credential length for the delegation guard.
 MIN_API_KEY_CHARS = 32
 
@@ -54,22 +58,16 @@ async def verify_friday_auth(
     authorization: str | None = Header(default=None),
 ) -> AuthUser:
     """Verify incoming FRIDAY API Key against FUTURIS_FRIDAY_API_KEY config."""
-    import os
-
-    # Every other agent names the caller's credential <AGENT>_API_KEY. Futuris was the
-    # sole exception, so a deployment configured to the fleet convention left this guard
-    # permanently unconfigured and every FRIDAY->Futuris call failed with a 503.
-    admin_key = os.getenv("FUTURIS_API_KEY") or settings.FUTURIS_API_KEY
+    # Settings is the single source of truth for credentials (B21). Reading the
+    # process environment here as well let a stray variable silently override the
+    # configured key. The FRIDAY_API_KEY alias is resolved by Settings itself.
+    #
     # A deployment that has not issued a dedicated FRIDAY key still has its own
     # master credential. Accepting that master key keeps delegation working for
     # the operator while remaining fail-closed: with no credential configured
     # at all the route refuses to serve.
-    expected_key = (
-        os.getenv("FUTURIS_FRIDAY_API_KEY")
-        or os.getenv("FRIDAY_API_KEY")
-        or settings.FUTURIS_FRIDAY_API_KEY
-        or admin_key
-    )
+    admin_key = settings.FUTURIS_API_KEY
+    expected_key = settings.FUTURIS_FRIDAY_API_KEY or admin_key
     auth_key = x_api_key
     if not auth_key and authorization:
         if authorization.startswith("Bearer "):
@@ -324,6 +322,53 @@ class FridayResolutionRequest(BaseModel):
     resolution_method: str = "automated_telemetry"
 
 
+def _friday_forecast_response(
+    req: FridayForecastRequest, forecast: Any
+) -> FridayForecastResponse:
+    """Build the delegation response for a forecast (fresh or replayed)."""
+    prob = forecast.probability or 0.5
+    prob_dist = forecast.predictive_distribution or {
+        "exceedance_probability": prob,
+        "p10": forecast.range_lower,
+        "p50": forecast.prediction,
+        "p90": forecast.range_upper,
+    }
+    drivers = [
+        DriverItem(
+            metric=d.name,
+            correlation=d.strength if d.direction == "increases_risk" else -d.strength,
+            lead_time="2h (lag-2 peak)" if d.leading_or_lagging == "leading" else "0h (concurrent)",
+        )
+        for d in forecast.drivers
+    ]
+    cal_score, cal_metrics = _honest_calibration(forecast)
+    return FridayForecastResponse(
+        futuris_forecast_id=forecast.forecast_id,
+        friday_request_id=req.friday_request_id,
+        prediction=PredictionPayload(
+            point_estimate=forecast.prediction,
+            lower_bound=forecast.range_lower,
+            upper_bound=forecast.range_upper,
+            probability_distribution=prob_dist,
+        ),
+        confidence=forecast.confidence.value.upper(),
+        status=forecast.status.value,
+        calibration_score=cal_score,
+        calibration_metrics=cal_metrics,
+        predictive_distribution=forecast.predictive_distribution or prob_dist,
+        intervals=forecast.intervals or {"90%": (forecast.range_lower, forecast.range_upper)},
+        model_metadata=forecast.model_metadata or {"model_version": forecast.model_version},
+        prediction_is_not_authorization=True,
+        executable_commands=[],
+        assumptions=forecast.assumptions or ["Cached idempotent response"],
+        evidence_snapshot_id=str(forecast.evidence[0].evidence_id)
+        if forecast.evidence
+        else "no_evidence_frozen",
+        model_used=forecast.model_version,
+        drivers_identified=drivers,
+    )
+
+
 @router.post(
     "/forecast",
     response_model=FridayForecastResponse,
@@ -346,53 +391,32 @@ async def delegate_forecast(
         req.idempotency_key or raw_header_key or f"friday_req:{req.friday_request_id}"
     )
 
+    horizon_map = {
+        "1h": timedelta(hours=1),
+        "24h": timedelta(hours=24),
+        "7d": timedelta(days=7),
+        "30d": timedelta(days=30),
+    }
+    h_delta = horizon_map[req.horizon]
+
     # 1. Idempotency Check
     if effective_idempotency_key:
         cached = await f_repo.get_by_idempotency_key(effective_idempotency_key)
         if cached:
-            prob = cached.probability or 0.5
-            prob_dist = cached.predictive_distribution or {
-                "exceedance_probability": prob,
-                "p10": cached.range_lower,
-                "p50": cached.prediction,
-                "p90": cached.range_upper,
-            }
-            drivers = [
-                DriverItem(
-                    metric=d.name,
-                    correlation=d.strength if d.direction == "increases_risk" else -d.strength,
-                    lead_time="2h (lag-2 peak)"
-                    if d.leading_or_lagging == "leading"
-                    else "0h (concurrent)",
+            # A reused key is only a replay when the payload matches. Serving
+            # the cached forecast for a *different* target would silently answer
+            # a question nobody asked, so a mismatch is a loud conflict.
+            if cached.target != req.target or cached.horizon != h_delta:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Idempotency key '{effective_idempotency_key}' was already used for "
+                        f"target '{cached.target}' with horizon '{cached.horizon}', not "
+                        f"'{req.target}' with '{req.horizon}'. Idempotency keys must not be "
+                        "reused across different payloads."
+                    ),
                 )
-                for d in cached.drivers
-            ]
-            _cal_score, _cal_metrics = _honest_calibration(cached)
-            return FridayForecastResponse(
-                futuris_forecast_id=cached.forecast_id,
-                friday_request_id=req.friday_request_id,
-                prediction=PredictionPayload(
-                    point_estimate=cached.prediction,
-                    lower_bound=cached.range_lower,
-                    upper_bound=cached.range_upper,
-                    probability_distribution=prob_dist,
-                ),
-                confidence=cached.confidence.value.upper(),
-                status=cached.status.value,
-                calibration_score=_cal_score,
-                calibration_metrics=_cal_metrics,
-                predictive_distribution=cached.predictive_distribution or prob_dist,
-                intervals=cached.intervals or {"90%": (cached.range_lower, cached.range_upper)},
-                model_metadata=cached.model_metadata or {"model_version": cached.model_version},
-                prediction_is_not_authorization=True,
-                executable_commands=[],
-                assumptions=cached.assumptions or ["Cached idempotent response"],
-                evidence_snapshot_id=str(cached.evidence[0].evidence_id)
-                if cached.evidence
-                else "snap_cached",
-                model_used=cached.model_version,
-                drivers_identified=drivers,
-            )
+            return _friday_forecast_response(req, cached)
 
     # 2. Check Staleness & Insufficient Data if telemetry data is provided
     t_data = req.telemetry_data or req.context.get("telemetry_data")
@@ -459,13 +483,6 @@ async def delegate_forecast(
     research_findings = finding_labels(reports)
 
     pipeline = ForecastingPipeline()
-    horizon_map = {
-        "1h": timedelta(hours=1),
-        "24h": timedelta(hours=24),
-        "7d": timedelta(days=7),
-        "30d": timedelta(days=30),
-    }
-    h_delta = horizon_map[req.horizon]
     now = datetime.now(UTC)
 
     result = await pipeline.run(
@@ -497,7 +514,25 @@ async def delegate_forecast(
         "research_reports_considered": len(reports),
     }
 
-    await f_repo.create(f, idempotency_key=effective_idempotency_key)
+    # 3.1 Persist. The unique index on idempotency_key is the arbiter when two
+    # delegations with the same key race: the first insert wins and the loser
+    # gets an IntegrityError, which is answered by replaying the winner -- the
+    # retry storm produces exactly one forecast and N identical responses.
+    try:
+        await f_repo.create(f, idempotency_key=effective_idempotency_key)
+    except IntegrityError:
+        from futuris.storage.db import safe_rollback
+
+        await safe_rollback(session)
+        winner = await f_repo.get_by_idempotency_key(effective_idempotency_key)
+        if winner is None or winner.target != req.target or winner.horizon != h_delta:
+            raise
+        logger.info(
+            "friday_delegation_idempotency_replay",
+            idempotency_key=effective_idempotency_key,
+            replayed_forecast_id=str(winner.forecast_id),
+        )
+        return _friday_forecast_response(req, winner)
 
     # 4. Audit Log
     audit_logger = AuditLogger(session)
@@ -510,51 +545,7 @@ async def delegate_forecast(
     )
     await session.commit()
 
-    drivers = [
-        DriverItem(
-            metric=d.name,
-            correlation=d.strength if d.direction == "increases_risk" else -d.strength,
-            lead_time="2h (lag-2 peak)" if d.leading_or_lagging == "leading" else "0h (concurrent)",
-        )
-        for d in f.drivers
-    ]
-
-    snapshot_id = str(f.evidence[0].evidence_id) if f.evidence else "no_evidence_frozen"
-
-    _fresh_cal_score, _fresh_cal_metrics = _honest_calibration(f)
-
-    prob = f.probability or 0.5
-    prob_dist = f.predictive_distribution or {
-        "exceedance_probability": prob,
-        "p10": f.range_lower,
-        "p50": f.prediction,
-        "p90": f.range_upper,
-    }
-
-    return FridayForecastResponse(
-        futuris_forecast_id=f.forecast_id,
-        friday_request_id=req.friday_request_id,
-        prediction=PredictionPayload(
-            point_estimate=f.prediction,
-            lower_bound=f.range_lower,
-            upper_bound=f.range_upper,
-            probability_distribution=prob_dist,
-        ),
-        confidence=f.confidence.value.upper(),
-        status=f.status.value,
-        calibration_score=_fresh_cal_score,
-        calibration_metrics=_fresh_cal_metrics,
-        predictive_distribution=f.predictive_distribution or prob_dist,
-        intervals=f.intervals or {"90%": (f.range_lower, f.range_upper)},
-        model_metadata=f.model_metadata
-        or {"model_version": f.model_version, "framework": "statsforecast"},
-        prediction_is_not_authorization=True,
-        executable_commands=[],
-        assumptions=f.assumptions,
-        evidence_snapshot_id=snapshot_id,
-        model_used=f.model_version,
-        drivers_identified=drivers,
-    )
+    return _friday_forecast_response(req, f)
 
 
 @router.post(
@@ -865,7 +856,20 @@ async def cancel_forecast(
             detail=f"Forecast '{forecast_id}' not found.",
         )
 
-    await f_repo.update_status(forecast_id, ForecastStatus.CANCELLED)
+    # Cancellation is a lifecycle transition, not an overwrite: a forecast that
+    # already reached a terminal state (resolved, invalidated, expired) keeps
+    # that state and its outcome.
+    cancelled = await f_repo.transition_status(
+        forecast_id, {ForecastStatus.ACTIVE, ForecastStatus.DRAFT}, ForecastStatus.CANCELLED
+    )
+    if cancelled is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Forecast '{forecast_id}' is '{forecast.status.value}' and cannot be "
+                "cancelled; only active or draft forecasts can be cancelled."
+            ),
+        )
 
     # Audit Log
     audit_logger = AuditLogger(session)
@@ -920,6 +924,17 @@ async def resolve_forecast(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Forecast '{req.forecast_id}' not found.",
+        )
+
+    # Only a live forecast accepts an outcome; the outcomes table's unique
+    # constraint is the final guard when two resolutions race.
+    if forecast.status not in (ForecastStatus.ACTIVE, ForecastStatus.DRAFT):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Forecast '{req.forecast_id}' is '{forecast.status.value}' and cannot be "
+                "resolved; only active or draft forecasts accept outcomes."
+            ),
         )
 
     existing = await outcome_repo.get_by_forecast(req.forecast_id)

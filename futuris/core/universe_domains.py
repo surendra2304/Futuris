@@ -36,6 +36,12 @@ class DomainTargetSpec:
     default_model: str = "ensemble:universe_calibrated@v1"
     mitigation_action: str = ""
     interpretation_template: str = ""
+    # True only for targets the local demand-forecasting pipeline actually
+    # measures (a capacity/throughput series in rpm). Every other target has no
+    # configured telemetry source in this deployment, so the honest answer for
+    # it -- without caller-supplied context -- is "insufficient data", never a
+    # demand number relabelled as a failure rate or a health index.
+    pipeline_target: bool = False
 
 
 # Full registry of supported targets across all 9 FRIDAY Universe pillars
@@ -285,14 +291,25 @@ UNIVERSE_TARGETS: dict[str, DomainTargetSpec] = {
         mitigation_action="Trigger horizontal pod autoscaling and activate edge checkout caching.",
         interpretation_template="Projected demand at {prediction:.0f} rpm ({probability:.1f}% "
             "risk of capacity exceedance).",
+        pipeline_target=True,
     ),
 }
 
 
-def get_target_spec(target: str) -> DomainTargetSpec:
-    """Retrieve spec for target or generate sensible default based on prefix."""
+def get_target_spec(target: str, *, strict: bool = False) -> DomainTargetSpec:
+    """Retrieve the spec for a target.
+
+    With ``strict=True`` only registered targets resolve; anything else raises
+    ``KeyError``. The universe prediction surface is strict: a typo'd target
+    must be a 422, not a fabricated spec that gets a demand-model number
+    relabelled under the typo's name. The prefix-deduction fallback below
+    remains available (``strict=False``) for internal callers that only need a
+    display shape.
+    """
     if target in UNIVERSE_TARGETS:
         return UNIVERSE_TARGETS[target]
+    if strict:
+        raise KeyError(target)
 
     # Dynamically deduce domain from prefix
     lower = target.lower()
@@ -349,6 +366,13 @@ def evaluate_risk_level(
     """Classify risk level as NOMINAL, ELEVATED, HIGH, or CRITICAL."""
     # Use probability if provided and target unit is %
     metric = probability if (probability is not None and spec.unit == "%") else prediction
+    # Percent-scale targets carry thresholds on the 0-1 probability scale, but
+    # a caller-supplied point estimate arrives on the 0-100 percent scale (the
+    # pipeline path never produces one for non-capacity targets any more).
+    # Comparing 42.0 against a 0.60 threshold without normalising classified
+    # every such target CRITICAL.
+    if spec.unit == "%" and probability is None and metric > 1.0:
+        metric = metric / 100.0
 
     if spec.is_lower_better:
         if metric >= spec.critical_risk_threshold:

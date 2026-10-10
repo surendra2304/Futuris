@@ -9,11 +9,16 @@ import httpx
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from futuris.connectors.base import warn_if_default_credential
 from futuris.infra.logging import get_logger
 from futuris.storage.db import async_session_factory
 from futuris.storage.models import IntelXNoticeModel
 
 logger = get_logger("futuris.connectors.intelx_context")
+
+#: Public placeholder, kept only so existing constructions keep working; using
+#: it is logged loudly (see warn_if_default_credential).
+INTELX_DEFAULT_KEY = "intelx_default_token"
 
 
 class IntelXResearchReport(BaseModel):
@@ -40,9 +45,10 @@ class IntelXContextInjector:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or "intelx_default_token"
+        self.api_key = api_key or INTELX_DEFAULT_KEY
         self.timeout_seconds = timeout_seconds
         self.transport = transport
+        warn_if_default_credential("intelx", self.api_key, INTELX_DEFAULT_KEY, logger)
 
     async def fetch_recent_research(
         self,

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,7 @@ from futuris.core.enums import EvidenceClass, ForecastStatus
 from futuris.core.schemas import Forecast
 from futuris.core.universe_domains import (
     UNIVERSE_TARGETS,
+    DomainTargetSpec,
     RiskLevel,
     UniverseDomain,
     evaluate_risk_level,
@@ -26,7 +27,7 @@ from futuris.core.universe_forecasting import (
     refresh_missing_within_budget,
 )
 from futuris.infra.audit import AuditLogger
-from futuris.infra.auth import AllowAnonymousRead, RequireAnalyst
+from futuris.infra.auth import AllowAnonymousHeavyRead, RequireAnalyst
 from futuris.infra.logging import get_logger
 from futuris.storage.repositories import ForecastRepository
 
@@ -81,25 +82,9 @@ class UniversePredictionRequest(BaseModel):
         ``point_estimate: "not-a-number"`` used to reach ``float()`` and return
         a 500 from deep inside the pipeline.
         """
-        numeric_keys = ("point_estimate", "current_value", "probability")
-        cleaned: dict[str, Any] = dict(value)
-        for key in numeric_keys:
-            raw = cleaned.get(key)
-            if raw is None:
-                continue
-            if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
-                raise ValueError(f"context.{key} must be a number")
-            try:
-                cleaned[key] = float(raw)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"context.{key} must be a number, got {raw!r}") from exc
-            if key == "probability" and not 0.0 <= cleaned[key] <= 1.0:
-                raise ValueError(
-                    f"context.probability must be between 0.0 and 1.0, got {cleaned[key]}"
-                )
-            if cleaned[key] != cleaned[key] or cleaned[key] in (float("inf"), float("-inf")):
-                raise ValueError(f"context.{key} must be a finite number")
-        return cleaned
+        from futuris.api.validation import validate_context_numeric_keys
+
+        return validate_context_numeric_keys(value)
 
 
 class UniversePredictionResponse(BaseModel):
@@ -162,6 +147,21 @@ class UniverseMatrixResponse(BaseModel):
     timestamp: datetime
 
 
+def _display_probability_percent(spec: DomainTargetSpec, forecast: Forecast) -> float:
+    """Percent value for the interpretation template.
+
+    A measured probability is a 0-1 fraction; a caller-supplied point estimate
+    for a percent-unit target is already the percent. The template prints
+    ``{probability:.1f}%``, so both must arrive on the 0-100 scale -- without
+    this, a caller estimate of 42 rendered as "0.0%".
+    """
+    if forecast.probability is not None:
+        return forecast.probability * 100.0
+    if spec.unit == "%":
+        return forecast.prediction
+    return 0.0
+
+
 @router.post(
     "/predict",
     response_model=UniversePredictionResponse,
@@ -174,7 +174,16 @@ async def request_universe_prediction(
     session: AsyncSession = Depends(get_db_session),
 ) -> UniversePredictionResponse:
     """Universal predictive intelligence endpoint for all 9 FRIDAY Universe subsystems."""
-    spec = get_target_spec(req.target)
+    try:
+        spec = get_target_spec(req.target, strict=True)
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Unknown universe target '{req.target}'. Registered targets: "
+                f"{sorted(UNIVERSE_TARGETS)}"
+            ),
+        ) from None
     fc = await generate_universe_forecast(req.target, context=req.context, session=session)
 
     await AuditLogger(session).log_mutation(
@@ -193,7 +202,7 @@ async def request_universe_prediction(
     risk = evaluate_risk_level(spec, fc.prediction, fc.probability)
     interp = spec.interpretation_template.format(
         prediction=fc.prediction,
-        probability=(fc.probability or 0.0) * 100.0,
+        probability=_display_probability_percent(spec, fc),
         unit=spec.unit,
     )
 
@@ -230,12 +239,12 @@ async def request_universe_prediction(
     summary="Get Complete FRIDAY Universe Predictive Risk Matrix",
 )
 async def get_universe_matrix(
-    user: AllowAnonymousRead,
+    user: AllowAnonymousHeavyRead,
     session: AsyncSession = Depends(get_db_session),
 ) -> UniverseMatrixResponse:
     """Aggregate risk posture and latest forecasts across the 9 FRIDAY Universe pillars."""
-    _ = user
-    return await build_universe_matrix(session)
+    actor = "anonymous_read" if user.is_anonymous else user.label
+    return await build_universe_matrix(session, actor_label=actor)
 
 
 def _as_of_key(forecast: Forecast) -> datetime:
@@ -255,6 +264,7 @@ async def build_universe_matrix(
     session: AsyncSession,
     *,
     budget_seconds: float = REFRESH_BUDGET_SECONDS,
+    actor_label: str | None = None,
 ) -> UniverseMatrixResponse:
     """Aggregate risk posture and the latest forecast for every registered target.
 
@@ -262,17 +272,34 @@ async def build_universe_matrix(
     forecast; the reads and the assembly that follow are cheap.
     """
     repo = ForecastRepository(session)
-    active_forecasts = await repo.list_by_status(ForecastStatus.ACTIVE)
+    # Latest forecast per target across active forecasts AND the honest
+    # non-answers (insufficient_data, blocked): a target that cannot be
+    # forecast must not be re-generated on every matrix request, or the
+    # budget is spent and the database churns on every anonymous read.
+    active_forecasts = await repo.list_by_statuses(
+        [ForecastStatus.ACTIVE, ForecastStatus.INSUFFICIENT_DATA, ForecastStatus.BLOCKED]
+    )
 
     # Index latest forecast by target
     latest_by_target: dict[str, Forecast] = {}
     for f in sorted(active_forecasts, key=_as_of_key):
         latest_by_target[f.target] = f
 
-    # Ensure all registered targets have a forecast represented
-    await refresh_missing_within_budget(
+    # Ensure all registered targets have a forecast represented. A backfill persists
+    # forecasts, so when the caller is known it is recorded in the audit log (S05).
+    before = set(latest_by_target)
+    generated = await refresh_missing_within_budget(
         session, latest_by_target, budget_seconds=budget_seconds
     )
+    backfilled = sorted(set(latest_by_target) - before)
+    if actor_label and backfilled:
+        await AuditLogger(session).log_mutation(
+            actor_label=actor_label,
+            action="matrix_backfill",
+            entity="universe_matrix",
+            entity_id="all",
+            payload={"targets": backfilled, "generated": generated},
+        )
 
     # Group by domain
     domain_map: dict[UniverseDomain, list[TargetPostureItem]] = {d: [] for d in UniverseDomain}
@@ -286,7 +313,7 @@ async def build_universe_matrix(
         all_risks.append(risk)
         interp = spec.interpretation_template.format(
             prediction=fc.prediction,
-            probability=(fc.probability or 0.0) * 100.0,
+            probability=_display_probability_percent(spec, fc),
             unit=spec.unit,
         )
 
@@ -386,7 +413,14 @@ async def refresh_universe_predictions(
     _ = user
     logger.info("refreshing_all_universe_predictions_started")
     started = time.monotonic()
-    await refresh_all_within_budget(session)
+    refreshed = await refresh_all_within_budget(session)
+    await AuditLogger(session).log_mutation(
+        actor_label=user.label,
+        action="refresh_all",
+        entity="universe_matrix",
+        entity_id="all",
+        payload={"generated": refreshed},
+    )
     # One request carries one budget. The matrix pass shares the deadline this
     # request already started, otherwise a degraded peer costs the full budget
     # once for the refresh and again for the backfill.

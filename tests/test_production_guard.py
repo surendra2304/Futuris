@@ -118,3 +118,21 @@ def test_production_startup_with_demo_credentials_is_refused():
     )
     assert result.returncode != 0
     assert "demo credentials cannot be enabled in production" in result.stderr
+
+
+def test_production_refuses_api_keys_disabled():
+    """API_KEYS_ENABLED=false in production would make every request an admin (B20)."""
+    from futuris.infra.config import Settings
+
+    settings_obj = Settings(
+        APP_ENV="production",
+        API_KEYS_ENABLED=False,
+        FUTURIS_API_KEY="a" * 40,
+        FUTURIS_FRIDAY_API_KEY="f" * 40,
+        INFERENCE_API_KEY="b" * 40,
+        MEMORA_API_KEY="c" * 40,
+        STRATEX_API_KEY="d" * 40,
+        INTELX_API_KEY="e" * 40,
+    )
+    with pytest.raises(RuntimeError, match="API_KEYS_ENABLED"):
+        settings_obj.validate_production_safety()

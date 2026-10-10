@@ -7,8 +7,11 @@ says so, and if a subsystem cannot be checked it says that too.
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from futuris.api.deps import get_db_session
+from futuris.infra.audit import AuditLogger
 from futuris.infra.auth import RequireAnalyst, RequireViewer
 from futuris.infra.resilience import peer_circuits
 from futuris.infra.self_healing import self_healing_supervisor
@@ -34,26 +37,48 @@ async def get_peer_circuits(user: RequireViewer) -> dict[str, Any]:
 
 
 @router.post("/peers/{peer}/reset", summary="Clear a Peer's Isolation (Analyst+)")
-async def reset_peer_circuit(peer: str, user: RequireAnalyst) -> dict[str, Any]:
+async def reset_peer_circuit(
+    peer: str,
+    user: RequireAnalyst,
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
     """Force a fresh probe for an isolated peer instead of waiting for cooldown."""
-    _ = user
     if peer not in peer_circuits.peers():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No circuit is tracked for peer '{peer}'.",
         )
     peer_circuits.reset(peer)
+    await AuditLogger(session).log_mutation(
+        actor_label=user.label,
+        action="peer_circuit_reset",
+        entity="peer_circuit",
+        entity_id=peer,
+        payload={"peer": peer, "state": "closed"},
+    )
     return {"peer": peer, "state": "closed", "reset_by": user.label}
 
 
 @router.post("/heal", summary="Run One Self-Healing Pass (Analyst+)")
-async def run_healing_pass(user: RequireAnalyst) -> dict[str, Any]:
+async def run_healing_pass(
+    user: RequireAnalyst,
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
     """Measure every subsystem and apply the recovery actions it can justify."""
-    _ = user
-    report = await self_healing_supervisor.status()
+    # force=True: an explicit healing pass must measure and heal now, never
+    # serve the liveness cache (B19).
+    report = await self_healing_supervisor.status(force=True)
+    actions = report["self_healing"]["actions_this_pass"]
+    await AuditLogger(session).log_mutation(
+        actor_label=user.label,
+        action="self_heal_pass",
+        entity="self_healing",
+        entity_id="supervisor",
+        payload={"status": report["status"], "actions": actions},
+    )
     return {
         "status": report["status"],
-        "actions": report["self_healing"]["actions_this_pass"],
+        "actions": actions,
         "triggered_by": user.label,
     }
 
@@ -67,12 +92,10 @@ async def get_capabilities(user: RequireViewer) -> dict[str, Any]:
     verified, and ``unconfigured`` otherwise. It is never aspirational.
     """
     _ = user
-    from futuris.api.app import app
+    from futuris.api.app import app, iter_route_paths
     from futuris.infra.config import settings
 
-    routes = sorted(
-        {getattr(route, "path", "") for route in app.routes if getattr(route, "path", "")}
-    )
+    routes = sorted(iter_route_paths(app))
 
     def capability(name: str, ready: bool, requires: str, detail: str) -> dict[str, Any]:
         return {

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from futuris.api.app import app
 from futuris.api.deps import get_db_session
+from futuris.infra.config import settings
 from futuris.storage.models import Base
 
 
@@ -29,7 +30,7 @@ async def friday_test_db():
 async def test_friday_forecast_delegation_authorized(friday_test_db: AsyncSession, monkeypatch):
     """Verify POST /v1/friday/forecast receives delegation and returns response."""
     friday_key = "friday_test_key_1234567890abcdef012345"
-    monkeypatch.setenv("FUTURIS_FRIDAY_API_KEY", friday_key)
+    monkeypatch.setattr(settings, "FUTURIS_FRIDAY_API_KEY", friday_key)
 
     async def _override_get_db():
         yield friday_test_db
@@ -130,7 +131,7 @@ async def test_delegated_forecast_carries_the_research_context(
     from futuris.connectors.intelx_context import IntelXResearchReport
 
     friday_key = "friday_test_key_1234567890abcdef012345"
-    monkeypatch.setenv("FUTURIS_FRIDAY_API_KEY", friday_key)
+    monkeypatch.setattr(settings, "FUTURIS_FRIDAY_API_KEY", friday_key)
 
     reports = [
         IntelXResearchReport(
@@ -184,7 +185,7 @@ async def test_delegation_survives_an_absent_research_peer(
 ) -> None:
     """No research peer: the forecast still lands and says research was absent."""
     friday_key = "friday_test_key_1234567890abcdef012345"
-    monkeypatch.setenv("FUTURIS_FRIDAY_API_KEY", friday_key)
+    monkeypatch.setattr(settings, "FUTURIS_FRIDAY_API_KEY", friday_key)
 
     async def no_reports(target, as_of, timeout_seconds=1.5):  # noqa: ANN001, ANN202
         return []
