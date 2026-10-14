@@ -1,11 +1,13 @@
 """Async SQLAlchemy database engine, session factory, and FastAPI dependencies."""
 
 import asyncio
+import atexit
 from collections.abc import AsyncGenerator
 from pathlib import Path
+import sqlite3
 
-from sqlalchemy import event as sa_event
-from sqlalchemy import pool
+
+from sqlalchemy import event as sa_event, pool, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -104,16 +106,47 @@ def install_sqlite_pragmas(target_engine: AsyncEngine) -> None:
         """
         cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
         try:
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.execute("PRAGMA busy_timeout=30000")
-            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA synchronous=NORMAL;")
+            cursor.execute("PRAGMA busy_timeout=30000;")
+            cursor.execute("PRAGMA foreign_keys=ON;")
         finally:
             cursor.close()
 
 
 if "sqlite" in settings.DATABASE_URL:
     install_sqlite_pragmas(engine)
+
+
+async def checkpoint_and_close_db() -> None:
+    """Flush SQLite WAL checkpoints and dispose database handles cleanly."""
+    try:
+        if "sqlite" in settings.DATABASE_URL:
+            async with engine.begin() as conn:
+                await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE);"))
+        await engine.dispose()
+        logger.info("database_checkpoint_and_close_success")
+    except Exception as exc:
+        logger.warning("database_checkpoint_failed", error=str(exc))
+
+
+def sync_sqlite_checkpoint() -> None:
+    """Best-effort synchronous SQLite WAL checkpoint on process exit."""
+    try:
+        if "sqlite" in settings.DATABASE_URL:
+            db_path = sqlite_file_path(settings.DATABASE_URL)
+            if db_path is not None and db_path.exists():
+                conn = sqlite3.connect(str(db_path), timeout=5.0)
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                finally:
+                    conn.close()
+    except Exception:
+        pass
+
+
+atexit.register(sync_sqlite_checkpoint)
+
 
 
 async_session_factory = async_sessionmaker(

@@ -16,7 +16,7 @@
 ## Meta files read
 - README.md (quickstart: docker compose → alembic upgrade head → cli demo → cli serve; architecture map; "Phases 5–6 queued" note is stale — NEXUS/FRIDAY adapters exist)
 - SECURITY.md (provenance guarantees, prediction≠authorization, model promotion gate, RBAC roles, append-only audit)
-- SYSTEM_MANIFEST.md (Render deployment URL https://futuris-th6f.onrender.com, env var contract)
+- SYSTEM_MANIFEST.md (Oracle Cloud deployment URL https://friday-universe.duckdns.org/futuris, env var contract)
 - AUDIT_REPORT.md (2026-09-01 self-audit by "Antigravity": claims 82 tests pass, 0 lint warnings, 5 bugs fixed, 3 security fixes)
 - FUTURIS_DIARY.md + diary/2026-08-28…09-12.md (9-day build log; claims 82→171 tests, "100% green, 0 lint warnings")
 - docs/events.md (webhook HMAC-SHA256 contract, event schemas), docs/audit/PHASE-1-2-AUDIT.md (2026-10-05 prior Arena agent audit — see below)

@@ -1,4 +1,4 @@
-# Multi-stage slim Dockerfile for FUTURIS API
+# Multi-stage production hardened Dockerfile for Futuris API
 FROM python:3.11-slim AS builder
 
 WORKDIR /build
@@ -11,13 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY pyproject.toml README.md requirements.txt* ./
+COPY requirements.txt pyproject.toml README.md ./
 COPY futuris ./futuris
+
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir --no-deps .
 
-# Stage 2: Runtime stage
+# Stage 2: Production runtime stage
 FROM python:3.11-slim AS runtime
 
 WORKDIR /app
@@ -32,15 +33,22 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PORT=8000
 
-RUN mkdir -p /app/data /app/data/storage
+# Create application directory structure and non-root user
+RUN mkdir -p /app/data /app/data/storage && \
+    useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
 
 COPY --from=builder /build/futuris /app/futuris
+RUN chown -R appuser:appuser /app
 
-EXPOSE 8000 10000
+USER appuser
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
-    CMD sh -c 'curl -f "http://127.0.0.1:${PORT:-8000}/health" || exit 1'
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 ENTRYPOINT ["tini", "--"]
 CMD ["python", "-m", "futuris.cli", "serve", "--host", "0.0.0.0", "--port", "8000"]

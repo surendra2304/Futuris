@@ -1,11 +1,14 @@
+# Python bytecode & cache
 __pycache__/
 *.py[cod]
 *.class
 *.so
 .Python
-env/
+
+# Distribution & build
 build/
 develop-eggs/
+dist/
 /dist/
 !futuris/ui/dist/**
 downloads/
@@ -21,26 +24,38 @@ wheels/
 .installed.cfg
 *.egg
 
-.env
+# Virtual Environments
+.venv/
 .venv
 venv/
+env/
 ENV/
 
+# Environment Variables
+.env
+.env.production
+.env.*
+!.env.example
+
+# Testing & Coverage
 .pytest_cache/
 .coverage
 htmlcov/
 .ruff_cache/
 
-data/
-data/storage/
-postgres_data/
-node_modules/
-futuris/ui/node_modules/
-ask_inference_from_futuris.py
-peer_mesh_futuris_results.json
-
-# SQLite databases are runtime state, never source
+# Databases & Runtime Storage
 *.db
+*.sqlite3
 *.db-wal
 *.db-shm
 *.db-journal
+data/
+data/storage/
+postgres_data/
+
+# Logs
+*.log
+
+# Node dependencies
+node_modules/
+futuris/ui/node_modules/

@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 import time
 from datetime import UTC, datetime, timedelta
@@ -7,7 +8,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from futuris.api.deps import get_db_session, get_event_repo, get_outcome_repo
@@ -520,11 +521,20 @@ async def delegate_forecast(
     # retry storm produces exactly one forecast and N identical responses.
     try:
         await f_repo.create(f, idempotency_key=effective_idempotency_key)
-    except IntegrityError:
+    except (IntegrityError, OperationalError):
         from futuris.storage.db import safe_rollback
 
         await safe_rollback(session)
-        winner = await f_repo.get_by_idempotency_key(effective_idempotency_key)
+        winner = None
+        for _ in range(20):
+            try:
+                winner = await f_repo.get_by_idempotency_key(effective_idempotency_key)
+                if winner is not None:
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(0.2)
+
         if winner is None or winner.target != req.target or winner.horizon != h_delta:
             raise
         logger.info(
@@ -533,6 +543,7 @@ async def delegate_forecast(
             replayed_forecast_id=str(winner.forecast_id),
         )
         return _friday_forecast_response(req, winner)
+
 
     # 4. Audit Log
     audit_logger = AuditLogger(session)
@@ -543,9 +554,19 @@ async def delegate_forecast(
         entity_id=str(f.forecast_id),
         payload={"target": req.target, "horizon": req.horizon, "prediction": f.prediction},
     )
-    await session.commit()
+    committed = False
+    for _ in range(10):
+        try:
+            await session.commit()
+            committed = True
+            break
+        except OperationalError:
+            await asyncio.sleep(0.1)
+    if not committed:
+        await session.commit()
 
     return _friday_forecast_response(req, f)
+
 
 
 @router.post(

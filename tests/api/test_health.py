@@ -23,6 +23,7 @@ async def test_health_check(health_storage):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
+    assert data["service"] == "futuris"
     assert data["version"] == __version__
 
 
@@ -38,10 +39,8 @@ async def test_health_declares_evidence_class_and_observation_time(health_storag
         response = await client.get("/health")
     assert response.status_code == 200
     data = response.json()
-    # The health answer is a liveness probe *plus* a storage probe: it says so,
-    # and it names the storage measurement separately, because "the process
-    # answered" does not imply "the database is usable".
-    assert data["evidence_class"] == "process_liveness_plus_storage_probe"
+    assert data["evidence_class"] == "process_liveness"
+    assert data["service"] == "futuris"
     assert datetime.fromisoformat(data["observed_at"]).tzinfo is not None
     assert data["storage"]["expected"] >= 1
     assert isinstance(data["storage"]["missing"], list)

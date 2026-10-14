@@ -1,4 +1,4 @@
-"""Structured JSON logging configuration for FUTURIS using structlog."""
+"""Structured timestamped logging configuration for Futuris."""
 
 import logging
 import sys
@@ -9,16 +9,34 @@ import structlog
 from futuris.infra.config import settings
 
 
+def _format_event_message(_: Any, __: Any, event_dict: dict[str, Any]) -> str:
+    """Format structlog event dictionary into a clean string message."""
+    event = event_dict.pop("event", "")
+    extras = [
+        f"{k}={v}"
+        for k, v in event_dict.items()
+        if not k.startswith("_") and k not in {"level", "timestamp", "logger"}
+    ]
+    if extras:
+        return f"{event} {' '.join(extras)}"
+    return str(event)
+
+
 def configure_logging() -> None:
-    """Configure standard library and structlog to output formatted JSON logs."""
+    """Configure standard library and structlog to output structured timestamped logs.
+
+    Format: [%(asctime)s] [%(levelname)s] [futuris]: %(message)s
+    """
     log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
+    log_format = "[%(asctime)s] [%(levelname)s] [futuris]: %(message)s"
+    date_format = "%Y-%m-%d %H:%M:%S"
 
     shared_processors: list[Any] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.TimeStamper(fmt=date_format),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
         structlog.processors.UnicodeDecoder(),
@@ -38,8 +56,10 @@ def configure_logging() -> None:
         foreign_pre_chain=shared_processors,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            structlog.processors.JSONRenderer(),
+            _format_event_message,
         ],
+        fmt=log_format,
+        datefmt=date_format,
     )
 
     handler = logging.StreamHandler(sys.stdout)

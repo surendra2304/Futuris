@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, Request, Response
+from fastapi import Body, FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
@@ -176,7 +177,11 @@ async def lifespan(_app: FastAPI):
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
     await event_emitter.aclose()
+    from futuris.storage.db import checkpoint_and_close_db
+
+    await checkpoint_and_close_db()
     logger.info("application_shutdown")
+
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -248,8 +253,16 @@ app = FastAPI(
 )
 
 # 1. Register Middlewares
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+
 
 # 2. Register Global Error Envelope Handlers
 register_error_handlers(app)
@@ -368,21 +381,157 @@ async def root(request: Request) -> Any:
 @app.head("/health", include_in_schema=False)
 @app.get("/health", tags=["Health"])
 async def health_check() -> dict[str, Any]:
-    """Health check: process liveness *and* a measured storage verdict.
-
-    This answer proves the process is up and serving requests. It does not probe
-    any dependency, so it says so instead of leaving the reader to guess -- but
-    storage is checked, because a process that is up while its database is
-    unusable is not healthy. ``status`` is ``degraded`` when storage is not
-    ready, and the storage block carries the measurement.
-    """
+    """Health check: process liveness and a measured storage verdict."""
     from futuris.storage.db import verify_schema
 
     storage = await verify_schema()
     return {
         "status": "ok" if storage["ready"] else "degraded",
-        "evidence_class": "process_liveness_plus_storage_probe",
+        "service": "futuris",
+        "evidence_class": "process_liveness",
         "observed_at": datetime.now(UTC).isoformat(),
         "version": __version__,
         "storage": storage,
     }
+
+
+@app.post("/forecast", tags=["Forecasting"])
+@app.post("/v1/forecast", tags=["Forecasting"], include_in_schema=False)
+async def quick_forecast(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Execute rapid forecasting pipeline for target metric and horizon."""
+    from futuris.api.routers.forecasts import parse_horizon
+    from futuris.core.engine import ForecastEngine
+    from futuris.storage.db import async_session_factory
+    from futuris.storage.repositories import ForecastRepository
+
+    target = str(body.get("target") or "service:checkout:capacity_exceedance_24h")
+    horizon = str(body.get("horizon") or "24h")
+    h_delta = parse_horizon(horizon)
+    engine = ForecastEngine()
+    as_of = datetime.now(UTC)
+
+    forecasts = await engine.orchestrate(target=target, as_of=as_of, horizon=h_delta)
+    f = forecasts[0]
+    async with async_session_factory() as session:
+        f_repo = ForecastRepository(session)
+        await f_repo.create(f)
+        await session.commit()
+
+    return {
+        "forecast_id": str(f.forecast_id),
+        "target": f.target,
+        "prediction": round(float(f.prediction), 4),
+        "range": {
+            "lower": round(float(f.range_lower), 4),
+            "central": round(float(f.prediction), 4),
+            "upper": round(float(f.range_upper), 4),
+        },
+        "probability": f.probability,
+        "confidence": f.confidence.value,
+        "model": f.model_version,
+        "as_of": f.as_of.isoformat(),
+        "horizon": horizon,
+        "status": f.status.value,
+        "prediction_is_not_authorization": True,
+        "executable_commands": [],
+    }
+
+
+@app.post("/simulate", tags=["Scenarios"])
+@app.post("/v1/simulate", tags=["Scenarios"], include_in_schema=False)
+async def quick_simulate(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Execute counterfactual scenario simulation against a baseline forecast."""
+    from datetime import timedelta
+    from uuid import UUID
+
+    from futuris.core.engine import ForecastEngine
+    from futuris.core.enums import ScenarioType
+    from futuris.scenarios.engine import ScenarioEngine
+    from futuris.scenarios.spec import ScenarioSpec
+    from futuris.storage.db import async_session_factory
+    from futuris.storage.repositories import ForecastRepository, ScenarioRepository
+
+    forecast_id_raw = body.get("forecast_id") or body.get("base_forecast_id")
+    async with async_session_factory() as session:
+        f_repo = ForecastRepository(session)
+        s_repo = ScenarioRepository(session)
+        base = None
+        if forecast_id_raw:
+            try:
+                base = await f_repo.get(UUID(str(forecast_id_raw)))
+            except Exception:
+                base = None
+        if not base:
+            recent = await f_repo.list_recent(limit=1)
+            base = recent[0] if recent else None
+        if not base:
+            engine = ForecastEngine()
+            forecasts = await engine.orchestrate(
+                target=str(body.get("target") or "service:checkout:capacity_exceedance_24h"),
+                as_of=datetime.now(UTC),
+                horizon=timedelta(hours=24),
+            )
+            base = forecasts[0]
+            await f_repo.create(base)
+            await session.commit()
+
+        name = str(body.get("name") or "Operational Stress Simulation")
+        overrides = body.get("assumption_overrides") or {
+            "demand_multiplier": 1.4,
+            "capacity_multiplier": 0.8,
+        }
+        spec = ScenarioSpec(
+            spec_id=uuid4(),
+            name=name,
+            scenario_type=ScenarioType.STRESS
+            if body.get("is_stress", True)
+            else ScenarioType.USER_DEFINED,
+            assumption_overrides=overrides,
+            rationale=str(body.get("rationale") or "Counterfactual simulation request"),
+        )
+        scenario_engine = ScenarioEngine(scenario_repo=s_repo)
+        res = await scenario_engine.run_scenario(base_forecast=base, spec=spec)
+        return {
+            "scenario_id": str(res.spec.spec_id),
+            "base_forecast_id": str(base.forecast_id),
+            "name": res.spec.name,
+            "perturbed_prediction": round(float(res.perturbed_prediction), 4),
+            "perturbed_probability": res.perturbed_probability,
+            "divergence": res.divergence,
+            "perturbed_values": res.perturbed_values,
+            "prediction_is_not_authorization": True,
+            "executable_commands": [],
+        }
+
+
+@app.get("/trends", tags=["Trends"])
+@app.get("/v1/trends", tags=["Trends"], include_in_schema=False)
+async def quick_trends(limit: int = 10) -> dict[str, Any]:
+    """Retrieve recent temporal trends and forecast trajectory history."""
+    from futuris.storage.db import async_session_factory
+    from futuris.storage.repositories import ForecastRepository
+
+    async with async_session_factory() as session:
+        f_repo = ForecastRepository(session)
+        recent = await f_repo.list_recent(limit=limit)
+        trends = [
+            {
+                "forecast_id": str(f.forecast_id),
+                "target": f.target,
+                "prediction": round(float(f.prediction), 4),
+                "range_lower": round(float(f.range_lower), 4),
+                "range_upper": round(float(f.range_upper), 4),
+                "probability": f.probability,
+                "confidence": f.confidence.value,
+                "created_at": f.created_at.isoformat() if f.created_at else None,
+                "status": f.status.value,
+            }
+            for f in recent
+        ]
+        return {
+            "status": "ok",
+            "count": len(trends),
+            "trends": trends,
+            "observed_at": datetime.now(UTC).isoformat(),
+        }
+

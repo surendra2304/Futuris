@@ -75,7 +75,7 @@ class Settings(BaseSettings):
         description="Whether API key authentication is enforced on API endpoints (always True).",
     )
     INFERENCE_URL: str = Field(
-        default="https://inference-h7bn.onrender.com",
+        default="http://inference:8000",
         description="Live Inference Gateway URL",
     )
     INFERENCE_API_KEY: str | None = Field(
@@ -83,7 +83,7 @@ class Settings(BaseSettings):
         description="Live Inference Gateway API Key",
     )
     MEMORA_URL: str = Field(
-        default="https://memora-cavc.onrender.com",
+        default="http://memora:8000",
         description="Live Memora Cloud Memory URL",
     )
     MEMORA_API_KEY: str | None = Field(
@@ -94,7 +94,7 @@ class Settings(BaseSettings):
         description="Live Memora Cloud Memory API Key",
     )
     STRATEX_URL: str = Field(
-        default="https://stratex-8wj1.onrender.com",
+        default="http://stratex:8000",
         description="Live Stratex Trading Bot URL",
     )
     STRATEX_API_KEY: str | None = Field(
@@ -102,7 +102,7 @@ class Settings(BaseSettings):
         description="Live Stratex Trading Bot API Key",
     )
     INTELX_URL: str = Field(
-        default="https://intelx-mygl.onrender.com",
+        default="http://intelx:8000",
         description="Live IntelX Intelligence Engine URL",
     )
     INTELX_API_KEY: str | None = Field(
@@ -110,19 +110,19 @@ class Settings(BaseSettings):
         description="Live IntelX Intelligence Engine API Key",
     )
     CORTEX_URL: str = Field(
-        default="https://cortex-0m7c.onrender.com",
+        default="http://cortex:8000",
         description="Live Cortex URL",
     )
     FORGE_URL: str = Field(
-        default="https://forge-e9kl.onrender.com",
+        default="http://forge:8000",
         description="Live Forge URL",
     )
     SENTINEL_URL: str = Field(
-        default="https://sentinel-a861.onrender.com",
+        default="http://sentinel:8000",
         description="Live Sentinel URL",
     )
     FRIDAY_URL: str = Field(
-        default="https://friday-zw59.onrender.com",
+        default="http://friday:10000",
         description="Live Friday URL",
     )
     FUTURIS_TELEMETRY_SOURCE: Literal["synthetic", "nexus"] = Field(
@@ -182,6 +182,17 @@ class Settings(BaseSettings):
             "spoof their address and escape the anonymous budget."
         ),
     )
+    CORS_ORIGINS: list[str] = Field(
+        default=[
+            "https://friday-universe.duckdns.org",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://localhost:8003",
+            "http://localhost:3000",
+        ],
+        description="Allowed CORS origin domains.",
+    )
+
 
     def validate_production_safety(self) -> None:
         """Enforce safe_config checks if running under production environment."""
