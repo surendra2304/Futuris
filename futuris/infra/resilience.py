@@ -13,6 +13,8 @@ exposed so ``/v1/self/status`` can report which peers the agent has isolated
 and whether it has recovered, rather than pretending everything is fine.
 """
 
+import asyncio
+import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -211,6 +213,12 @@ CircuitOpen = CircuitOpenError
 
 
 
+def compute_jittered_backoff(attempt: int, base: float = 0.05, max_delay: float = 0.5) -> float:
+    """Compute exponential backoff delay with randomized jitter."""
+    exp = min(max_delay, base * (2 ** (attempt - 1)))
+    return exp + random.uniform(0, 0.5 * exp)
+
+
 async def guarded_call(
     registry: CircuitBreakerRegistry,
     peer: str,
@@ -218,8 +226,9 @@ async def guarded_call(
     *,
     fallback: T | None = None,
     on_failure: Callable[[BaseException], None] | None = None,
+    max_retries: int = 0,
 ) -> T | None:
-    """Run ``call`` under the peer's breaker.
+    """Run ``call`` under the peer's breaker with exponential backoff and jitter.
 
     Returns ``fallback`` when the breaker refuses the call or when the call
     itself fails; never raises for peer problems, because callers of a peer
@@ -233,18 +242,25 @@ async def guarded_call(
         return fallback
 
     breaker.total_calls += 1
-    try:
-        result = await call()
-    except Exception as exc:
-        breaker.record_failure(f"{type(exc).__name__}: {exc}")
-        PEER_CALL_TOTAL.labels(peer=peer, outcome="failed").inc()
-        if on_failure is not None:
-            on_failure(exc)
-        return fallback
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            result = await call()
+            breaker.record_success()
+            PEER_CALL_TOTAL.labels(peer=peer, outcome="ok").inc()
+            return result
+        except Exception as exc:
+            if attempts <= max_retries:
+                delay = compute_jittered_backoff(attempts)
+                await asyncio.sleep(delay)
+                continue
+            breaker.record_failure(f"{type(exc).__name__}: {exc}")
+            PEER_CALL_TOTAL.labels(peer=peer, outcome="failed").inc()
+            if on_failure is not None:
+                on_failure(exc)
+            return fallback
 
-    breaker.record_success()
-    PEER_CALL_TOTAL.labels(peer=peer, outcome="ok").inc()
-    return result
 
 
 # Process-wide registry for the peer mesh.

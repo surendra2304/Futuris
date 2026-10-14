@@ -44,7 +44,7 @@ FUTURIS is deployed on an Oracle Cloud Always Free host (Ampere A1 ARM64 / AMD x
 ┌───────────────────────────────┐
 │   SQLite 3 WAL (futuris.db)   │
 │   PRAGMA journal_mode=WAL     │
-│   PRAGMA busy_timeout=5000    │
+│   PRAGMA busy_timeout=30000   │
 └───────────────────────────────┘
 ```
 
@@ -57,7 +57,7 @@ FUTURIS uses an optimized, local file-backed **SQLite 3** storage engine designe
 - **Storage Location**: `data/futuris.db`
 - **Write-Ahead Logging (WAL)**: All database connections execute `PRAGMA journal_mode=WAL;` to allow non-blocking concurrent reads while write transactions are processing.
 - **Concurrency Protections**:
-  - `PRAGMA busy_timeout=5000;`: Waits up to 5 seconds before failing on lock contention.
+  - `PRAGMA busy_timeout=30000;`: Waits up to 30 seconds to absorb burst concurrent write spikes without contention failures.
   - `PRAGMA synchronous=NORMAL;`: Maximizes I/O throughput on modern filesystems while preserving durability.
   - `PRAGMA foreign_keys=ON;`: Guarantees relational integrity across forecast horizons, outcomes, and scenario mutations.
 - **Graceful Shutdown & Signal Trapping**:
@@ -99,7 +99,82 @@ curl -s http://localhost:8000/health
 
 ---
 
-### 2. Probabilistic Forecast (`/forecast`)
+### 2. Readiness Probe (`/ready`)
+Validates active database round-trip execution (`SELECT 1;`) and table schema completeness before admitting traffic from the gateway.
+
+- **Method**: `GET` / `HEAD`
+- **Path**: `/ready`
+
+**cURL Example**:
+```bash
+curl -s http://localhost:8000/ready
+```
+
+**Response Payload (HTTP 200 OK)**:
+```json
+{
+  "status": "ready",
+  "service": "futuris",
+  "database": "connected",
+  "version": "1.0.0",
+  "observed_at": "2026-10-14T21:40:00.123456+00:00"
+}
+```
+
+---
+
+### 3. Service Status & Diagnostics (`/status`)
+Exposes detailed operational telemetry, memory footprint, cache performance, and peer circuit breaker states.
+
+- **Method**: `GET`
+- **Path**: `/status`
+
+**cURL Example**:
+```bash
+curl -s http://localhost:8000/status
+```
+
+**Response Payload (HTTP 200 OK)**:
+```json
+{
+  "status": "healthy",
+  "service": "futuris",
+  "role": "Temporal Modeling, Scenario Simulation & Predictive Intelligence",
+  "version": "1.0.0",
+  "environment": "prod",
+  "port": 8000,
+  "uptime_seconds": 3612.45,
+  "observed_at": "2026-10-14T21:40:00.123456+00:00",
+  "memory": {
+    "rss_mb": 78.42,
+    "vms_mb": 184.20
+  },
+  "cache": {
+    "size": 14,
+    "max_size": 2000,
+    "hits": 342,
+    "misses": 28,
+    "hit_ratio": 0.9243,
+    "evictions": 0,
+    "expirations": 4
+  },
+  "circuit_breakers": [
+    {
+      "peer": "inference",
+      "state": "closed",
+      "consecutive_failures": 0,
+      "total_calls": 45,
+      "total_failures": 0,
+      "retry_in_seconds": 0.0
+    }
+  ],
+  "scheduler_active": true
+}
+```
+
+---
+
+### 4. Probabilistic Forecast (`/forecast`)
 Generates calibrated probabilistic forecasts and uncertainty bands for any target metric over a specified horizon.
 
 - **Method**: `POST`
@@ -144,7 +219,7 @@ curl -X POST http://localhost:8000/forecast \
 
 ---
 
-### 3. Counterfactual Scenario Simulation (`/simulate`)
+### 5. Counterfactual Scenario Simulation (`/simulate`)
 Simulates what-if scenarios and stress conditions on top of a parent forecast baseline without altering historical or base telemetry.
 
 - **Method**: `POST`
@@ -196,7 +271,7 @@ curl -X POST http://localhost:8000/simulate \
 
 ---
 
-### 4. Temporal Trends & Trajectory History (`/trends`)
+### 6. Temporal Trends & Trajectory History (`/trends`)
 Returns recent forecast trajectories, probability drift, and status across tracked targets.
 
 - **Method**: `GET`

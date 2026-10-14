@@ -23,6 +23,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.exc import TimeoutError as SQLATimeoutError
 
@@ -137,7 +138,9 @@ def storage_error_response(exc: OperationalError) -> JSONResponse:
                 "code": code,
                 "message": public,
                 "details": {"dialect_error": message[:MAX_DETAIL_CHARS]},
-            }
+            },
+            "message": public,
+            "success": False,
         },
     )
 
@@ -155,7 +158,9 @@ def register_error_handlers(app: FastAPI) -> None:
                     "code": exc.code,
                     "message": exc.message,
                     "details": sanitise_for_json(exc.details),
-                }
+                },
+                "message": exc.message,
+                "success": False,
             },
         )
 
@@ -164,14 +169,17 @@ def register_error_handlers(app: FastAPI) -> None:
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         _ = request
+        msg = "Request payload failed schema validation"
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
                 "error": {
                     "code": "validation_error",
-                    "message": "Request payload failed schema validation",
+                    "message": msg,
                     "details": sanitise_for_json(exc.errors()),
-                }
+                },
+                "message": msg,
+                "success": False,
             },
         )
 
@@ -179,17 +187,17 @@ def register_error_handlers(app: FastAPI) -> None:
     async def integrity_exception_handler(request: Request, exc: IntegrityError) -> JSONResponse:
         _ = request
         logger.warning("integrity_error", error=str(exc.orig)[:300])
+        msg = "The request conflicts with an existing record (unique or foreign-key constraint)."
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={
                 "error": {
                     "code": "conflict",
-                    "message": (
-                        "The request conflicts with an existing record (unique or "
-                        "foreign-key constraint)."
-                    ),
+                    "message": msg,
                     "details": {"dialect_error": str(exc.orig)[:MAX_DETAIL_CHARS]},
-                }
+                },
+                "message": msg,
+                "success": False,
             },
         )
 
@@ -200,8 +208,11 @@ def register_error_handlers(app: FastAPI) -> None:
         _ = request
         return storage_error_response(exc)
 
+    @app.exception_handler(StarletteHTTPException)
     @app.exception_handler(HTTPException)
-    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    async def http_exception_handler(
+        request: Request, exc: HTTPException | StarletteHTTPException
+    ) -> JSONResponse:
         _ = request
         code_map = {
             404: "not_found",
@@ -213,17 +224,20 @@ def register_error_handlers(app: FastAPI) -> None:
             501: "not_implemented",
             503: "service_unavailable",
         }
+        detail_msg = exc.detail if isinstance(exc.detail, str) else "HTTP error"
         return JSONResponse(
             status_code=exc.status_code,
             headers=exc.headers,
             content={
                 "error": {
                     "code": code_map.get(exc.status_code, "http_error"),
-                    "message": exc.detail if isinstance(exc.detail, str) else "HTTP error",
+                    "message": detail_msg,
                     "details": (
                         sanitise_for_json(exc.detail) if isinstance(exc.detail, dict) else {}
                     ),
-                }
+                },
+                "message": detail_msg,
+                "success": False,
             },
         )
 
@@ -237,17 +251,17 @@ def register_error_handlers(app: FastAPI) -> None:
         """
         _ = request
         logger.error("pool_timeout", error=str(exc)[:300])
+        msg = "The server is at its database concurrency limit. Retry shortly."
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
                 "error": {
                     "code": "server_busy",
-                    "message": (
-                        "The server is at its database concurrency limit. "
-                        "Retry shortly."
-                    ),
+                    "message": msg,
                     "details": {"remediation": "retry with backoff; reduce concurrency"},
-                }
+                },
+                "message": msg,
+                "success": False,
             },
         )
 
@@ -262,17 +276,21 @@ def register_error_handlers(app: FastAPI) -> None:
             detail=str(exc)[:400],
             request_id=request.headers.get("X-Request-ID"),
         )
+        msg = "An unexpected internal error occurred"
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "error": {
                     "code": "internal_server_error",
-                    "message": "An unexpected internal error occurred",
+                    "message": msg,
                     "details": {
                         "error_type": type(exc).__name__,
                         "request_id": request.headers.get("X-Request-ID"),
                         "remediation": "check server logs for the request id",
                     },
-                }
+                },
+                "message": msg,
+                "success": False,
             },
         )
+

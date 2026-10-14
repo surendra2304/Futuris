@@ -4,13 +4,14 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+import time
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import httpx
 from fastapi import Body, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from starlette.exceptions import HTTPException
@@ -47,6 +48,8 @@ from futuris.upgrade.safe_config import is_production_environment
 
 configure_logging()
 logger = get_logger("futuris.api")
+_START_TIME: float = time.time()
+
 
 # Published by the lifespan so /v1/self/status reports the scheduler that is
 # actually running in this process rather than assuming it
@@ -395,17 +398,108 @@ async def health_check() -> dict[str, Any]:
     }
 
 
+@app.head("/ready", include_in_schema=False)
+@app.get("/ready", tags=["Health"])
+async def readiness_check() -> JSONResponse:
+    """Readiness probe: validates active database round-trip connectivity and schema readiness."""
+    from sqlalchemy import text
+
+    from futuris.storage.db import engine, verify_schema
+
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1;"))
+        storage = await verify_schema()
+        if storage.get("ready"):
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "ready",
+                    "service": "futuris",
+                    "database": "connected",
+                    "version": __version__,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "service": "futuris",
+                "database": "schema_incomplete",
+                "missing": storage.get("missing", []),
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "service": "futuris",
+                "database": "disconnected",
+                "error": f"{type(exc).__name__}: {exc}",
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+
+@app.get("/status", tags=["Observability"])
+async def service_status() -> dict[str, Any]:
+    """Diagnostic operational status reporting telemetry, uptime, memory, and cache stats."""
+    import os
+
+    from futuris.infra.cache import forecast_cache
+    from futuris.infra.resilience import peer_circuits
+
+    uptime = round(time.time() - _START_TIME, 2)
+    memory_info: dict[str, Any] = {}
+    try:
+        import psutil
+
+        proc = psutil.Process(os.getpid())
+        mem = proc.memory_info()
+        memory_info = {
+            "rss_mb": round(mem.rss / (1024 * 1024), 2),
+            "vms_mb": round(mem.vms / (1024 * 1024), 2),
+        }
+    except Exception:
+        memory_info = {"note": "process telemetry active"}
+
+    return {
+        "status": "healthy",
+        "service": "futuris",
+        "role": "Temporal Modeling, Scenario Simulation & Predictive Intelligence",
+        "version": __version__,
+        "environment": settings.APP_ENV,
+        "port": 8000,
+        "uptime_seconds": uptime,
+        "observed_at": datetime.now(UTC).isoformat(),
+        "memory": memory_info,
+        "cache": forecast_cache.stats(),
+        "circuit_breakers": peer_circuits.snapshots(),
+        "scheduler_active": globals().get("_running_scheduler") is not None,
+    }
+
+
 @app.post("/forecast", tags=["Forecasting"])
 @app.post("/v1/forecast", tags=["Forecasting"], include_in_schema=False)
 async def quick_forecast(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """Execute rapid forecasting pipeline for target metric and horizon."""
+    """Execute rapid forecasting pipeline for target metric and horizon with in-memory caching."""
     from futuris.api.routers.forecasts import parse_horizon
     from futuris.core.engine import ForecastEngine
+    from futuris.infra.cache import forecast_cache
     from futuris.storage.db import async_session_factory
     from futuris.storage.repositories import ForecastRepository
 
     target = str(body.get("target") or "service:checkout:capacity_exceedance_24h")
     horizon = str(body.get("horizon") or "24h")
+    cache_key = f"forecast:{target}:{horizon}"
+
+    cached = forecast_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     h_delta = parse_horizon(horizon)
     engine = ForecastEngine()
     as_of = datetime.now(UTC)
@@ -417,7 +511,7 @@ async def quick_forecast(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         await f_repo.create(f)
         await session.commit()
 
-    return {
+    result = {
         "forecast_id": str(f.forecast_id),
         "target": f.target,
         "prediction": round(float(f.prediction), 4),
@@ -435,6 +529,9 @@ async def quick_forecast(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         "prediction_is_not_authorization": True,
         "executable_commands": [],
     }
+    forecast_cache.set(cache_key, result, ttl_seconds=30.0)
+    return result
+
 
 
 @app.post("/simulate", tags=["Scenarios"])
@@ -507,7 +604,14 @@ async def quick_simulate(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
 @app.get("/trends", tags=["Trends"])
 @app.get("/v1/trends", tags=["Trends"], include_in_schema=False)
 async def quick_trends(limit: int = 10) -> dict[str, Any]:
-    """Retrieve recent temporal trends and forecast trajectory history."""
+    """Retrieve recent temporal trends and forecast trajectory history with in-memory cache."""
+    cache_key = f"trends:limit_{limit}"
+    from futuris.infra.cache import forecast_cache
+
+    cached = forecast_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     from futuris.storage.db import async_session_factory
     from futuris.storage.repositories import ForecastRepository
 
@@ -528,10 +632,13 @@ async def quick_trends(limit: int = 10) -> dict[str, Any]:
             }
             for f in recent
         ]
-        return {
+        result = {
             "status": "ok",
             "count": len(trends),
             "trends": trends,
             "observed_at": datetime.now(UTC).isoformat(),
         }
+        forecast_cache.set(cache_key, result, ttl_seconds=15.0)
+        return result
+
 

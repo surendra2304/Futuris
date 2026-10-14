@@ -4,6 +4,7 @@ The guard was a no-op by default: it recognised only the spelling ``prod`` and
 returned early unless ``STRICT_PRODUCTION_SECRETS=true`` was set as well.
 """
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -65,7 +66,7 @@ def test_default_environment_is_not_production():
     assert Settings().APP_ENV == "dev"
 
 
-def test_production_startup_requires_credentials():
+def test_production_startup_requires_credentials(tmp_path: Path):
     """Importing the config in production without secrets must fail closed."""
     script = textwrap.dedent(
         """
@@ -73,16 +74,20 @@ def test_production_startup_requires_credentials():
         print("STARTED")
         """
     )
+    clean_env = {
+        k: v for k, v in os.environ.items()
+        if not k.endswith("_API_KEY") and k not in {"APP_ENV", "ALLOW_DEMO_CREDENTIALS"}
+    }
+    clean_env.update({
+        "APP_ENV": "production",
+        "PYTHONPATH": str(REPO_ROOT),
+    })
     result = subprocess.run(
         [sys.executable, "-c", script],
-        cwd=REPO_ROOT,
+        cwd=tmp_path,
         capture_output=True,
         text=True,
-        env={
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
-            "APP_ENV": "production",
-            "PYTHONPATH": str(REPO_ROOT),
-        },
+        env=clean_env,
         check=False,
     )
     assert result.returncode != 0
@@ -97,23 +102,27 @@ def test_production_startup_with_demo_credentials_is_refused():
         print("STARTED")
         """
     )
+    demo_env = {
+        k: v for k, v in os.environ.items()
+        if not k.endswith("_API_KEY") and k not in {"APP_ENV", "ALLOW_DEMO_CREDENTIALS"}
+    }
+    demo_env.update({
+        "APP_ENV": "production",
+        "ALLOW_DEMO_CREDENTIALS": "true",
+        "FUTURIS_API_KEY": "m" * 40,
+        "FUTURIS_FRIDAY_API_KEY": "f" * 40,
+        "MEMORA_API_KEY": "x" * 40,
+        "INTELX_API_KEY": "i" * 40,
+        "INFERENCE_API_KEY": "n" * 40,
+        "STRATEX_API_KEY": "s" * 40,
+        "PYTHONPATH": str(REPO_ROOT),
+    })
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        env={
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
-            "APP_ENV": "production",
-            "ALLOW_DEMO_CREDENTIALS": "true",
-            "FUTURIS_API_KEY": "m" * 40,
-            "FUTURIS_FRIDAY_API_KEY": "f" * 40,
-            "MEMORA_API_KEY": "x" * 40,
-            "INTELX_API_KEY": "i" * 40,
-            "INFERENCE_API_KEY": "n" * 40,
-            "STRATEX_API_KEY": "s" * 40,
-            "PYTHONPATH": str(REPO_ROOT),
-        },
+        env=demo_env,
         check=False,
     )
     assert result.returncode != 0
