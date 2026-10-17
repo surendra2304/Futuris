@@ -93,4 +93,6 @@ async def test_request_id_header_is_bounded_and_sanitized(health_storage):
         replacement = oversized.headers["x-request-id"]
         assert replacement != "x" * 256
         assert len(replacement) == 36
-        assert all(char in "0123456789abcdef-" for char in replacement.lower())
+        assert all(
+            char in "0123456789abcdef-" for char in replacement.lower()
+        )
