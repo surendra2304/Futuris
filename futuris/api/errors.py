@@ -137,7 +137,9 @@ def storage_error_response(exc: OperationalError) -> JSONResponse:
             "error": {
                 "code": code,
                 "message": public,
-                "details": {"dialect_error": message[:MAX_DETAIL_CHARS]},
+                "details": {
+                    "remediation": "check the server-side logs using the request correlation ID"
+                },
             },
             "message": public,
             "success": False,
@@ -194,7 +196,9 @@ def register_error_handlers(app: FastAPI) -> None:
                 "error": {
                     "code": "conflict",
                     "message": msg,
-                    "details": {"dialect_error": str(exc.orig)[:MAX_DETAIL_CHARS]},
+                    "details": {
+                        "remediation": "check the server-side logs for the constraint violation"
+                    },
                 },
                 "message": msg,
                 "success": False,
