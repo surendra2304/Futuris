@@ -67,7 +67,7 @@ async def test_standardized_error_envelope_404():
 
 @pytest.mark.asyncio
 async def test_standardized_error_envelope_422(monkeypatch):
-    """Schema validation failure returns standardized error envelope with message and success: false."""
+    """Schema validation failure returns a standardized error envelope."""
     from futuris.infra.config import settings
 
     monkeypatch.setattr(settings, "API_KEYS_ENABLED", False)
