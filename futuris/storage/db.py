@@ -6,7 +6,8 @@ import sqlite3
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from sqlalchemy import event as sa_event, pool, text
+from sqlalchemy import event as sa_event
+from sqlalchemy import pool, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
