@@ -80,3 +80,17 @@ async def test_standardized_error_envelope_422(monkeypatch):
     assert data["success"] is False
     assert "message" in data
 
+
+
+@pytest.mark.asyncio
+async def test_request_id_header_is_bounded_and_sanitized(health_storage):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        valid = await client.get("/ready", headers={"X-Request-ID": "friday-task:123"})
+        assert valid.headers["x-request-id"] == "friday-task:123"
+
+        oversized = await client.get("/ready", headers={"X-Request-ID": "x" * 256})
+        replacement = oversized.headers["x-request-id"]
+        assert replacement != "x" * 256
+        assert len(replacement) == 36
+        assert all(char in "0123456789abcdef-" for char in replacement.lower())
