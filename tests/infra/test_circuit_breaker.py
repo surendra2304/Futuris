@@ -1,7 +1,7 @@
 """Unit tests for asynchronous circuit breaker."""
 
 import asyncio
-import time
+
 import pytest
 
 from futuris.infra.circuit_breaker import (
@@ -14,7 +14,9 @@ from futuris.infra.circuit_breaker import (
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_initial_state_closed():
-    breaker = AsyncCircuitBreaker(name="test_service_initial", failure_threshold=2, recovery_timeout=0.5)
+    breaker = AsyncCircuitBreaker(
+        name="test_service_initial", failure_threshold=2, recovery_timeout=0.5
+    )
     assert breaker.state == CircuitState.CLOSED
     assert breaker.failure_count == 0
 
@@ -28,7 +30,9 @@ async def test_circuit_breaker_initial_state_closed():
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_trips_to_open_on_failures():
-    breaker = AsyncCircuitBreaker(name="test_service_trip", failure_threshold=2, recovery_timeout=0.5)
+    breaker = AsyncCircuitBreaker(
+        name="test_service_trip", failure_threshold=2, recovery_timeout=0.5
+    )
 
     async def failing_call():
         raise RuntimeError("Service failure")
@@ -45,7 +49,9 @@ async def test_circuit_breaker_trips_to_open_on_failures():
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_rejects_when_open():
-    breaker = AsyncCircuitBreaker(name="test_service_reject", failure_threshold=1, recovery_timeout=1.0)
+    breaker = AsyncCircuitBreaker(
+        name="test_service_reject", failure_threshold=1, recovery_timeout=1.0
+    )
 
     async def failing_call():
         raise RuntimeError("Immediate failure")
@@ -65,7 +71,9 @@ async def test_circuit_breaker_rejects_when_open():
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_fallback_when_open_and_failing():
-    breaker = AsyncCircuitBreaker(name="test_service_fallback", failure_threshold=1, recovery_timeout=0.5)
+    breaker = AsyncCircuitBreaker(
+        name="test_service_fallback", failure_threshold=1, recovery_timeout=0.5
+    )
 
     async def failing_call():
         raise ConnectionError("Timeout")

@@ -1,11 +1,10 @@
 """Asynchronous circuit breaker with exponential backoff, jitter, and graceful degradation."""
 
 import asyncio
-from collections.abc import Callable, Coroutine
-from datetime import UTC, datetime
-from enum import Enum
 import random
 import time
+from collections.abc import Callable, Coroutine
+from enum import StrEnum
 from typing import Any, TypeVar
 
 from futuris.infra.logging import get_logger
@@ -15,7 +14,7 @@ logger = get_logger("futuris.infra.circuit_breaker")
 T = TypeVar("T")
 
 
-class CircuitState(str, Enum):
+class CircuitState(StrEnum):
     CLOSED = "CLOSED"
     OPEN = "OPEN"
     HALF_OPEN = "HALF_OPEN"
@@ -96,7 +95,8 @@ class AsyncCircuitBreaker:
         max_retries: int = 0,
         **kwargs: Any,
     ) -> T:
-        """Execute async function guarded by circuit breaker state with optional retries and fallback."""
+        """Execute async function guarded by circuit breaker state
+        with optional retries and fallback."""
         async with self._lock:
             self.total_requests += 1
             now = time.monotonic()

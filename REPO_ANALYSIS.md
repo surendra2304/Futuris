@@ -87,7 +87,7 @@
 | CLI | `futuris/cli.py` (typer) | `serve`, `forecast`, `backtest`, `sweep`, `demo`, `create-admin-key`, `ingest` |
 | Migrations | `alembic/` (`env.py`, `versions/0001`–`0004`) | Schema evolution |
 | Container | `Dockerfile` (multi-stage, `python:3.11-slim`, tini, `/health` healthcheck) | Production image |
-| Local stack | `docker-compose.yml` (Postgres 16 + API) | Local Postgres path |
+| Local stack | `docker-compose.yml` (Postgres 18 + API) | Local Postgres path |
 | Hosting | `render.yaml` (free plan, SQLite on disk) | Render blueprint |
 | CI | `.github/workflows/ci.yml` (`lint`, `test`, `ui` jobs) | See §11 |
 | Harnesses | `scripts/*.py` (9 scripts) | End-to-end, mesh, pressure, extreme, adversarial |
@@ -170,7 +170,7 @@ flowchart LR
 - CPU-bound fitting runs in worker threads behind a per-loop semaphore sized to CPU count (`futuris/infra/cpu.py:76` `run_cpu`).
 - Outbound calls are bounded: research enrichment 1.5 s (`futuris/infra/research_context.py:25`), peer calls 6 s with circuit breakers (`futuris/infra/resilience.py`), Memora publish 3 s × 2 attempts (`futuris/integrations/memora_forecast_publisher.py:92`).
 
-**Process/deployment topology [FACT].** Dockerfile runs `tini` and a `/health` healthcheck; compose runs Postgres 16 and the API; Render runs a single free-plan web service with SQLite on disk (`render.yaml:5,17`). Horizontal scaling is not supported by the in-memory state listed in §12 (S07, R5).
+**Process/deployment topology [FACT].** Dockerfile runs `tini` and a `/health` healthcheck; compose runs Postgres 18 and the API; Render runs a single free-plan web service with SQLite on disk (`render.yaml:5,17`). Horizontal scaling is not supported by the in-memory state listed in §12 (S07, R5).
 
 **Design rules the code enforces [FACT].**
 1. *Prediction is not authorisation.* `prediction_is_not_authorization` must be True and `executable_commands` must be empty (`futuris/core/schemas.py:205-259`); `/v1/task/execute` and `/v1/friday/delegate` return 403 for command-like actions (`futuris/api/app.py` `execute_task`; `futuris/api/routers/friday.py:557`).

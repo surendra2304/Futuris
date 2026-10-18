@@ -43,14 +43,28 @@ def assert_public_destination(host: str) -> None:
         return
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
+        # NAT64 well-known prefix (RFC 6052 64:ff9b::/96) translates IPv4 addresses.
+        # Check the embedded IPv4 to prevent SSRF while allowing public IPv4 destinations.
+        if ip.version == 6 and ip in ipaddress.IPv6Network("64:ff9b::/96"):
+            embedded = ipaddress.IPv4Address(ip.packed[-4:])
+            is_unsafe = (
+                embedded.is_private
+                or embedded.is_loopback
+                or embedded.is_link_local
+                or embedded.is_multicast
+                or embedded.is_reserved
+                or embedded.is_unspecified
+            )
+        else:
+            is_unsafe = (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            )
+        if is_unsafe:
             msg = f"webhook destination '{host}' resolves to non-public address {ip}"
             raise UnsafeWebhookUrlError(msg)
 

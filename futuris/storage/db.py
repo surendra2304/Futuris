@@ -2,12 +2,12 @@
 
 import asyncio
 import atexit
+import sqlite3
 from collections.abc import AsyncGenerator
 from pathlib import Path
-import sqlite3
 
-
-from sqlalchemy import event as sa_event, pool, text
+from sqlalchemy import event as sa_event
+from sqlalchemy import pool, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,

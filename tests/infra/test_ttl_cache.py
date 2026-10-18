@@ -1,7 +1,7 @@
 """Unit tests for thread-safe in-memory TTLCache."""
 
-import asyncio
 import time
+
 import pytest
 
 from futuris.infra.cache import TTLCache, cached_async

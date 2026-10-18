@@ -1,12 +1,11 @@
 """Thread-safe in-memory TTL/LRU caching with stats tracking and decorator support."""
 
-from collections import OrderedDict
-from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime
 import functools
 import threading
 import time
+from collections import OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from futuris.infra.logging import get_logger
