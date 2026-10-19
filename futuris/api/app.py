@@ -1,8 +1,8 @@
 """FastAPI application instance with OpenAPI contracts, error handlers, and UI static mount."""
 
 import asyncio
-import time
 import re
+import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
