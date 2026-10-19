@@ -132,9 +132,11 @@ async def test_integrity_error_is_a_json_envelope_and_keeps_the_connection(
     assert response.status_code == 409, response.text
     payload = response.json()
     assert payload["error"]["code"] == "conflict"
-    # The raw constraint failure stays in the envelope details: it is what makes
-    # a 409 actionable for the operator who has to find the offending row.
-    assert "FOREIGN KEY constraint failed" in payload["error"]["details"]["dialect_error"]
+    # The response should preserve a useful conflict envelope without exposing
+    # driver internals, table names, or the raw SQL constraint error to callers.
+    assert isinstance(payload["error"]["details"], dict)
+    assert "dialect_error" not in payload["error"]["details"]
+    assert "FOREIGN KEY constraint failed" not in response.text
 
 
 @pytest.mark.asyncio
