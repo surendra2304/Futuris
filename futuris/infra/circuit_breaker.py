@@ -95,7 +95,8 @@ class AsyncCircuitBreaker:
         max_retries: int = 0,
         **kwargs: Any,
     ) -> T:
-        """Execute an async operation with retries and an optional fallback."""
+        """Execute async function guarded by circuit breaker state
+        with optional retries and fallback."""
         async with self._lock:
             self.total_requests += 1
             now = time.monotonic()
