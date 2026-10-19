@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+import re
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -187,11 +188,17 @@ async def lifespan(_app: FastAPI):
 
 
 
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
 class RequestIdMiddleware(BaseHTTPMiddleware):
-    """Middleware ensuring every request has and echoes an X-Request-ID header."""
+    """Propagate a bounded, safe request ID; replace invalid client values."""
 
     async def dispatch(self, request: Request, call_next: Any) -> Response:
-        req_id = request.headers.get("X-Request-ID", str(uuid4()))
+        supplied = request.headers.get("X-Request-ID", "")
+        # Do not reflect unbounded or control-character-bearing client input into
+        # response headers/log correlation. A generated UUID is safe and bounded.
+        req_id = supplied if _REQUEST_ID_PATTERN.fullmatch(supplied) else str(uuid4())
         response = await call_next(request)
         response.headers["X-Request-ID"] = req_id
         return response
