@@ -1,6 +1,7 @@
 """Tests for evidence snapshotting, immutability, and hash stability."""
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -88,3 +89,84 @@ def test_source_trust_registry():
 
     assert registry.get_trust("unverified:feed:external") == SourceTrust.UNTRUSTED
     assert registry.is_eligible_for_training("unverified:feed:external") is False
+
+
+def test_freeze_dataframe_and_verify_tamper_detection(tmp_path):
+    """Test freeze_dataframe, verify_snapshot, tamper detection, and loading."""
+    import pandas as pd
+
+    from futuris.core.enums import EvidenceClass
+    from futuris.evidence.snapshots import SnapshotNotFoundError, SnapshotTamperedError
+
+    snapshotter = EvidenceSnapshotter(base_storage_path=str(tmp_path))
+    now = datetime.now(UTC)
+
+    df = pd.DataFrame(
+        {
+            "observed_at": [now - timedelta(minutes=10), now - timedelta(minutes=5), now],
+            "value": [10.5, 20.0, 30.5],
+            "user_id": ["u1", "u2", "u3"],  # PII field to be sanitized
+            "email": ["a@b.com", "c@d.com", "e@f.com"],  # PII field
+        }
+    )
+
+    f_id = uuid4()
+    ev_ref = snapshotter.freeze_dataframe(
+        df=df,
+        series_id="service:payment:throughput",
+        as_of=now,
+        forecast_id=f_id,
+        source_id="telemetry:datadog:prod",
+        evidence_class=EvidenceClass.LIVE,
+    )
+
+    assert ev_ref.evidence_class == EvidenceClass.LIVE
+    assert len(ev_ref.content_hash) == 64
+
+    # Verify snapshot integrity
+    assert snapshotter.verify_snapshot(ev_ref) is True
+
+    # Load snapshot and ensure PII was dropped
+    loaded_df = snapshotter.load_snapshot(ev_ref)
+    assert len(loaded_df) == 3
+    assert "user_id" not in loaded_df.columns
+    assert "email" not in loaded_df.columns
+    assert "value" in loaded_df.columns
+
+    # Test tampering detection: alter bytes on disk
+    path = Path(ev_ref.snapshot_path)
+    # Temporarily remove read-only to simulate malicious modification
+    import stat
+    path.chmod(stat.S_IWRITE | stat.S_IREAD)
+    with open(path, "ab") as f:
+        f.write(b"corrupted_tampered_bytes")
+
+    with pytest.raises(SnapshotTamperedError):
+        snapshotter.verify_snapshot(ev_ref)
+
+    with pytest.raises(SnapshotTamperedError):
+        snapshotter.load_snapshot(ev_ref)
+
+    # Test empty dataframe error
+    with pytest.raises(ValueError, match="Cannot freeze empty snapshot"):
+        snapshotter.freeze_dataframe(
+            df=pd.DataFrame(),
+            series_id="service:payment:throughput",
+            as_of=now,
+        )
+
+    # Test already exists error on freeze_dataframe
+    with pytest.raises(SnapshotAlreadyExistsError):
+        snapshotter.freeze_dataframe(
+            df=df,
+            series_id="service:payment:throughput",
+            as_of=now,
+            forecast_id=f_id,
+            source_id="telemetry:datadog:prod",
+        )
+
+    # Test missing file
+    missing_path = str(tmp_path / "nonexistent.parquet")
+    ev_ref_missing = ev_ref.model_copy(update={"snapshot_path": missing_path})
+    with pytest.raises(SnapshotNotFoundError):
+        snapshotter.verify_snapshot(ev_ref_missing)

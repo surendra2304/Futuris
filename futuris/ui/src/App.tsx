@@ -132,15 +132,34 @@ function App() {
               <article className="panel prediction-panel" id="predictions">
                 <div className="panel-header"><div><div className="panel-kicker">FORECAST WORKSPACE</div><h2>Prediction integrity</h2></div><span className="integrity-icon"><Gauge size={17} /></span></div>
                 {forecasts.loading && !forecasts.data ? <div className="loading-state compact"><span className="loader" />Checking forecast records…</div> : forecasts.error ? <EmptyPanel title="Forecast API unavailable" detail={forecasts.error} icon={Activity} /> : list.length === 0 ? <EmptyPanel title="No forecast records yet" detail="Create a forecast through the API or run the demo seed to populate the workspace." icon={Activity} /> : <div className="forecast-preview-list">
-                  {list.slice(0, 5).map((f) => (
-                    <div className="forecast-preview-row" key={f.forecast_id}>
-                      <div className="forecast-preview-main">
-                        <span className="forecast-preview-target">{f.target}</span>
-                        <span className="forecast-preview-value">{f.prediction.toFixed(1)} <small>[{f.range.lower.toFixed(0)} – {f.range.upper.toFixed(0)}]</small></span>
+                  {list.slice(0, 5).map((f) => {
+                    const isLive = f.evidence_class === 'live' || f.input_telemetry_verified === true;
+                    return (
+                      <div className="forecast-preview-row" key={f.forecast_id}>
+                        <div className="forecast-preview-main">
+                          <span className="forecast-preview-target">{f.target}</span>
+                          {isLive ? (
+                            <span className="forecast-preview-value verified">
+                              {f.prediction.toFixed(1)} <small>[{f.range.lower.toFixed(0)} – {f.range.upper.toFixed(0)}]</small>
+                            </span>
+                          ) : (
+                            <span className="forecast-preview-value withheld" title="Input telemetry is unverified or synthetic; forecast value withheld under Safety Invariant 2">
+                              WITHHELD [Unverified Input Telemetry]
+                            </span>
+                          )}
+                        </div>
+                        {isLive ? (
+                          <span className="evidence-pill evidence-live" title="Verified live input telemetry">
+                            <span className="badge-live-dot" />VERIFIED LIVE INPUT
+                          </span>
+                        ) : (
+                          <span className={`evidence-pill evidence-${f.evidence_class ?? 'synthetic'}`}>
+                            {f.evidence_class ? f.evidence_class.toUpperCase() : 'UNVERIFIED'}
+                          </span>
+                        )}
                       </div>
-                      <span className={`evidence-pill evidence-${f.evidence_class ?? 'synthetic'}`}>{f.evidence_class ?? 'synthetic'}</span>
-                    </div>
-                  ))}
+                    );
+                  })}
                   <div className="notice-count">{list.length} record{list.length === 1 ? '' : 's'} · {verifiedForecastCount} measured (live/derived) · {syntheticCount} synthetic/demo — every value is labelled, none is presented as measured unless it is</div>
                 </div>}
               </article>

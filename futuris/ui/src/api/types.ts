@@ -45,6 +45,7 @@ export interface Forecast {
   created_at?: string;
   evidence_class?: 'live' | 'derived' | 'synthetic' | 'demo';
   evidence_source?: string | null;
+  input_telemetry_verified?: boolean;
 }
 
 export interface Outcome {

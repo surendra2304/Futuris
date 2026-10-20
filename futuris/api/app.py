@@ -518,6 +518,15 @@ async def quick_forecast(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         await f_repo.create(f)
         await session.commit()
 
+    from futuris.core.enums import EvidenceClass
+
+    ev_class = getattr(f, "evidence_class", None)
+    if hasattr(ev_class, "value"):
+        ev_val = ev_class.value
+    else:
+        ev_val = str(ev_class) if ev_class else "synthetic"
+    is_live = ev_val == "live" or ev_class == EvidenceClass.LIVE
+
     result = {
         "forecast_id": str(f.forecast_id),
         "target": f.target,
@@ -533,6 +542,9 @@ async def quick_forecast(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         "as_of": f.as_of.isoformat(),
         "horizon": horizon,
         "status": f.status.value,
+        "evidence_class": ev_val,
+        "evidence_source": getattr(f, "evidence_source", None),
+        "input_telemetry_verified": is_live,
         "prediction_is_not_authorization": True,
         "executable_commands": [],
     }

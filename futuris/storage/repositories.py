@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from futuris.connectors.base import Observation
 from futuris.core.enums import (
     ConfidenceLevel,
     EvidenceClass,
@@ -31,6 +32,7 @@ from futuris.storage.models import (
     ForecastEventModel,
     ForecastModel,
     ModelRegistryModel,
+    ObservationModel,
     OutcomeModel,
     ScenarioModel,
 )
@@ -188,6 +190,17 @@ class ForecastRepository:
     async def get_by_id(self, forecast_id: UUID) -> Forecast | None:
         """Alias for get(forecast_id)."""
         return await self.get(forecast_id)
+
+    async def delete(self, forecast_id: UUID) -> bool:
+        """Delete a forecast by ID, cascading to evidence_refs and events."""
+        stmt = select(ForecastModel).where(ForecastModel.forecast_id == forecast_id)
+        result = await self.session.execute(stmt)
+        model = result.scalar_one_or_none()
+        if not model:
+            return False
+        await self.session.delete(model)
+        await self.session.flush()
+        return True
 
     async def list_by_target(
         self, target: str, as_of_range: tuple[datetime, datetime] | None = None
@@ -516,6 +529,7 @@ class EvidenceRepository:
             as_of=evidence.as_of,
             snapshot_path=evidence.snapshot_path,
             content_hash=evidence.content_hash,
+            evidence_class=evidence.evidence_class.value if evidence.evidence_class else None,
         )
         self.session.add(model)
         await self.session.flush()
@@ -535,7 +549,45 @@ class EvidenceRepository:
             as_of=m.as_of,
             snapshot_path=m.snapshot_path,
             content_hash=m.content_hash,
+            evidence_class=EvidenceClass(m.evidence_class)
+            if m.evidence_class
+            else EvidenceClass.SYNTHETIC,
         )
+
+    async def list_by_forecast(self, forecast_id: UUID) -> list[EvidenceRef]:
+        """List all evidence references attached to a specific forecast."""
+        stmt = (
+            select(EvidenceRefModel)
+            .where(EvidenceRefModel.forecast_id == forecast_id)
+            .order_by(EvidenceRefModel.as_of.asc())
+        )
+        result = await self.session.execute(stmt)
+        return [
+            EvidenceRef(
+                evidence_id=m.evidence_id,
+                source=m.source,
+                source_trust=SourceTrust(m.source_trust),
+                signal_class=SignalClass(m.signal_class),
+                as_of=m.as_of,
+                snapshot_path=m.snapshot_path,
+                content_hash=m.content_hash,
+                evidence_class=EvidenceClass(m.evidence_class)
+                if m.evidence_class
+                else EvidenceClass.SYNTHETIC,
+            )
+            for m in result.scalars().all()
+        ]
+
+    async def delete(self, evidence_id: UUID) -> bool:
+        """Delete an evidence reference record."""
+        stmt = select(EvidenceRefModel).where(EvidenceRefModel.evidence_id == evidence_id)
+        result = await self.session.execute(stmt)
+        model = result.scalar_one_or_none()
+        if not model:
+            return False
+        await self.session.delete(model)
+        await self.session.flush()
+        return True
 
 
 class EventRepository:
@@ -855,3 +907,93 @@ class ScenarioRepository:
             created_by=m.created_by,
             parent_forecast_id=m.parent_forecast_id,
         )
+
+
+class ObservationRepository:
+    """Repository managing ingested telemetry observations."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    def _to_domain(self, model: ObservationModel) -> Observation:
+        return Observation(
+            observation_id=model.observation_id,
+            series_id=model.series_id,
+            source=model.source,
+            observed_at=model.observed_at,
+            value=model.value,
+            unit=model.unit,
+            tags=model.tags or {},
+        )
+
+    async def record_observation(self, observation: Observation) -> Observation:
+        """Persist a single telemetry observation record."""
+        obs_id = getattr(observation, "observation_id", None) or uuid4()
+        model = ObservationModel(
+            observation_id=obs_id,
+            series_id=observation.series_id,
+            source=observation.source,
+            observed_at=observation.observed_at,
+            value=observation.value,
+            unit=observation.unit,
+            tags=observation.tags or {},
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return self._to_domain(model)
+
+    async def record_batch(self, observations: list[Observation]) -> list[Observation]:
+        """Persist a batch of telemetry observation records."""
+        models = [
+            ObservationModel(
+                observation_id=getattr(obs, "observation_id", None) or uuid4(),
+                series_id=obs.series_id,
+                source=obs.source,
+                observed_at=obs.observed_at,
+                value=obs.value,
+                unit=obs.unit,
+                tags=obs.tags or {},
+            )
+            for obs in observations
+        ]
+        self.session.add_all(models)
+        await self.session.flush()
+        return [self._to_domain(m) for m in models]
+
+    async def list_by_series(
+        self,
+        series_id: str,
+        limit: int = 100,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[Observation]:
+        """List observations for a series ordered newest first."""
+        stmt = select(ObservationModel).where(ObservationModel.series_id == series_id)
+        if since is not None:
+            stmt = stmt.where(ObservationModel.observed_at >= since)
+        if until is not None:
+            stmt = stmt.where(ObservationModel.observed_at <= until)
+        stmt = stmt.order_by(ObservationModel.observed_at.desc()).limit(limit)
+        result = await self.session.execute(stmt)
+        return [self._to_domain(m) for m in result.scalars().all()]
+
+    async def get_latest(self, series_id: str) -> Observation | None:
+        """Fetch the most recent observation for a series."""
+        stmt = (
+            select(ObservationModel)
+            .where(ObservationModel.series_id == series_id)
+            .order_by(ObservationModel.observed_at.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        model = result.scalar_one_or_none()
+        return self._to_domain(model) if model else None
+
+    async def delete_by_series(self, series_id: str) -> int:
+        """Delete all observations for a series identifier."""
+        from sqlalchemy import delete
+
+        stmt = delete(ObservationModel).where(ObservationModel.series_id == series_id)
+        res = await self.session.execute(stmt)
+        await self.session.flush()
+        return int(res.rowcount or 0)

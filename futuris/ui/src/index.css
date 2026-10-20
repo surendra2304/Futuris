@@ -116,6 +116,9 @@ h2 { margin-top: 6px; color: #e8edf5; font: 650 15px 'Manrope', sans-serif; lett
 .forecast-preview-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .forecast-preview-target { font: 8px 'DM Mono', monospace; color: #8f8672; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .forecast-preview-value { font: 12px 'DM Mono', monospace; color: #e8e2d2; }
+.forecast-preview-value.withheld { color: #d69f7f; font-style: italic; font-size: 10px; }
+.forecast-preview-value.verified { color: #a3e6b5; }
+.badge-live-dot { display: inline-block; width: 5px; height: 5px; margin-right: 4px; border-radius: 50%; background: #5bd0aa; }
 .forecast-preview-value small { color: #8f8672; font-size: 9px; }
 .evidence-pill { flex-shrink: 0; padding: 3px 7px; border-radius: 4px; font: 8px 'DM Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em; }
 .evidence-live { border: 1px solid #2c5a3a; color: #7fd69a; background: #16241b; }
