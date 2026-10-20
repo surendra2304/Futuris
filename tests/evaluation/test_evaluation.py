@@ -72,6 +72,17 @@ def test_calibration_analyzer_detects_deliberate_miscalibration():
     assert np.isclose(non_empty[0], 0.50, atol=0.05)
 
 
+def test_ece_compares_observed_rate_with_mean_probability_in_each_bin():
+    analyzer = CalibrationAnalyzer(num_bins=10)
+
+    curve = analyzer.compute_reliability_curve([0.86, 0.88], [False, False])
+
+    assert curve.calibration_error == pytest.approx(0.87)
+    assert calibration_error([False, False], [0.86, 0.88], num_bins=10) == pytest.approx(
+        curve.calibration_error
+    )
+
+
 def test_hierarchical_shrinkage_behavior():
     """Verify shrinkage behavior: small n stays near pooled; large n converges to target."""
     analyzer = CalibrationAnalyzer(shrinkage_k=20.0)

@@ -87,8 +87,8 @@ async def test_pipeline_reports_no_measured_calibration_without_outcomes():
     assert "ece" not in metrics
     assert metrics.get("n_resolved_outcomes") == 0
     assert metrics.get("calibration_status") == "uncalibrated"
-    # The implied Brier score is computable from the probability alone and is real.
-    assert "brier_score" in metrics
+    assert "brier_score" not in metrics
+    assert all("nominal_coverage" not in interval for interval in result.forecast.intervals)
 
 
 @pytest.mark.asyncio

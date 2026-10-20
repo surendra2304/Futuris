@@ -138,10 +138,11 @@ async def test_friday_structured_forecast_with_uncertainty(
         # than serving a plausible-looking ECE.
         assert "calibration_metrics" in data
         cal = data["calibration_metrics"]
-        assert "brier_score" in cal
+        assert "brier_score" not in cal
         assert cal.get("n_resolved_outcomes", 0) == 0
         assert "ece" not in cal
         assert cal.get("calibration_status") == "uncalibrated"
+        assert all("nominal_coverage" not in interval for interval in data["intervals"])
 
         # Model metadata
         assert "model_metadata" in data

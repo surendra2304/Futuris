@@ -294,12 +294,9 @@ class CalibrationDecisionStage:
             {"step": i + 1, "lower": inter.lower, "central": inter.central, "upper": inter.upper}
             for i, inter in enumerate(inp.prediction.intervals[:10])
         ]
-        # Only the forecast's own implied Brier score can be computed here:
-        # ECE and empirical coverage require resolved outcomes, which this
-        # pipeline run has none of. The calibration analyzer adds real scores
-        # once outcomes exist.
+        # Proper scoring metrics require paired predictions and resolved
+        # outcomes; a pipeline run has no outcomes to score.
         cal_metrics = {
-            "brier_score": round(prob * (1.0 - prob), 4),
             "n_resolved_outcomes": 0,
             "calibration_status": "uncalibrated",
         }

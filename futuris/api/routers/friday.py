@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import math
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -309,9 +310,9 @@ class FridayScenarioResponse(BaseModel):
 
 
 class FridayCalibrationReport(BaseModel):
-    overall_ece: float
+    overall_ece: float | None
     per_target_type_calibration: dict[str, float]
-    trend: Literal["improving", "degrading", "stable"]
+    trend: Literal["improving", "degrading", "stable", "insufficient_data"]
     recent_accuracy_summary: dict[str, Any]
 
 
@@ -357,7 +358,8 @@ def _friday_forecast_response(
         calibration_score=cal_score,
         calibration_metrics=cal_metrics,
         predictive_distribution=forecast.predictive_distribution or prob_dist,
-        intervals=forecast.intervals or {"90%": (forecast.range_lower, forecast.range_upper)},
+        intervals=forecast.intervals
+        or [{"lower": forecast.range_lower, "upper": forecast.range_upper}],
         model_metadata=forecast.model_metadata or {"model_version": forecast.model_version},
         prediction_is_not_authorization=True,
         executable_commands=[],
@@ -1095,35 +1097,133 @@ async def list_friday_forecasts(
 async def get_friday_calibration(
     outcome_repo: OutcomeRepository = Depends(get_outcome_repo),
 ) -> FridayCalibrationReport:
-    """Return FRIDAY-consumable calibration report with target breakdown and trends."""
+    """Return FRIDAY calibration metrics calculated only from resolved forecasts."""
     analyzer = CalibrationAnalyzer()
-    outcomes = await outcome_repo.list_all(limit=500)
+    pairs = await outcome_repo.list_resolved_with_forecasts(limit=5000)
+    samples = [
+        (forecast, outcome)
+        for forecast, outcome in pairs
+        if forecast.probability is not None and outcome.event_occurred is not None
+    ]
+    probs = [float(forecast.probability) for forecast, _ in samples]
+    actuals = [bool(outcome.event_occurred) for _, outcome in samples]
 
-    probs = [0.1, 0.2, 0.3, 0.6, 0.75, 0.9]
-    actuals = [False, False, False, True, True, True]
-    if outcomes:
-        dyn_actuals = [bool(o.event_occurred) for o in outcomes if o.event_occurred is not None]
-        if len(dyn_actuals) >= 4:
-            actuals = dyn_actuals[:6]
-            probs = [0.2 + (i * 0.12) for i in range(len(actuals))]
+    target_samples: dict[str, list[tuple[float, bool]]] = {}
+    for forecast, outcome in samples:
+        target_samples.setdefault(forecast.target, []).append(
+            (float(forecast.probability), bool(outcome.event_occurred))
+        )
 
-    curve = analyzer.compute_reliability_curve(
-        predicted_probs=probs,
-        actual_outcomes=actuals,
+    per_target_ece = {
+        target: analyzer.compute_expected_calibration_error(
+            [probability for probability, _ in target_pairs],
+            [actual for _, actual in target_pairs],
+        )
+        for target, target_pairs in target_samples.items()
+    }
+
+    interval_samples = [
+        (forecast, outcome)
+        for forecast, outcome in pairs
+        if outcome.observed_value is not None
+    ]
+    coverage = (
+        sum(
+            forecast.range_lower <= outcome.observed_value <= forecast.range_upper
+            for forecast, outcome in interval_samples
+        )
+        / len(interval_samples)
+        if interval_samples
+        else None
     )
 
+    declared_interval_results: dict[float, list[bool]] = {}
+    for forecast, outcome in interval_samples:
+        observed_value = outcome.observed_value
+        intervals = getattr(forecast, "intervals", None)
+        if (
+            isinstance(observed_value, bool)
+            or not isinstance(observed_value, (int, float))
+            or not isinstance(intervals, list)
+        ):
+            continue
+        try:
+            observed_value = float(observed_value)
+        except (OverflowError, ValueError):
+            continue
+        if not math.isfinite(observed_value):
+            continue
+
+        intervals_by_level: dict[float, list[tuple[float, float]]] = {}
+        for interval in intervals:
+            if not isinstance(interval, dict):
+                continue
+            level = interval.get("nominal_coverage")
+            lower = interval.get("lower")
+            upper = interval.get("upper")
+            if any(
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                for value in (level, lower, upper)
+            ):
+                continue
+            try:
+                level, lower, upper = map(float, (level, lower, upper))
+            except (OverflowError, ValueError):
+                continue
+            if not all(math.isfinite(value) for value in (level, lower, upper)):
+                continue
+            if not 0.0 < level < 1.0 or lower > upper:
+                continue
+            intervals_by_level.setdefault(float(level), []).append((lower, upper))
+
+        # Outcomes are forecast-level observations. Multiple intervals at the
+        # same nominal level (for example, per-step bounds) cannot be paired
+        # unambiguously with that single observation, so exclude that level.
+        for level, bounds in intervals_by_level.items():
+            if len(bounds) == 1:
+                lower, upper = bounds[0]
+                declared_interval_results.setdefault(level, []).append(
+                    lower <= observed_value <= upper
+                )
+
+    nominal_interval_coverage = {
+        f"{level:g}": {
+            "empirical_coverage": round(sum(results) / len(results), 4),
+            "sample_count": len(results),
+        }
+        for level, results in sorted(declared_interval_results.items())
+    }
+
+    trend: Literal["improving", "degrading", "stable", "insufficient_data"] = (
+        "insufficient_data"
+    )
+    if len(samples) >= 10:
+        split_at = len(samples) // 2
+        earlier_ece = analyzer.compute_expected_calibration_error(
+            probs[:split_at], actuals[:split_at]
+        )
+        recent_ece = analyzer.compute_expected_calibration_error(
+            probs[split_at:], actuals[split_at:]
+        )
+        if recent_ece < earlier_ece - 0.01:
+            trend = "improving"
+        elif recent_ece > earlier_ece + 0.01:
+            trend = "degrading"
+        else:
+            trend = "stable"
+
     return FridayCalibrationReport(
-        overall_ece=curve.expected_calibration_error,
-        per_target_type_calibration={
-            "service:checkout:capacity_exceedance_24h": curve.expected_calibration_error,
-            "business:leads:next_7d": round(curve.expected_calibration_error * 1.1, 4),
-            "risk:security:threat_escalation_48h": round(curve.expected_calibration_error * 1.2, 4),
-            "trading:btc:volatility_spike_24h": round(curve.expected_calibration_error * 1.3, 4),
-        },
-        trend="improving",
+        overall_ece=(
+            analyzer.compute_expected_calibration_error(probs, actuals) if samples else None
+        ),
+        per_target_type_calibration=per_target_ece,
+        trend=trend,
         recent_accuracy_summary={
-            "brier_score": round(curve.expected_calibration_error * 2, 4),
-            "coverage_90_pct": 0.90,
-            "resolved_samples": max(len(outcomes), len(actuals)),
+            "brier_score": analyzer.compute_brier_score(probs, actuals) if samples else None,
+            "range_coverage": coverage,
+            "interval_sample_count": len(interval_samples),
+            "nominal_interval_coverage": nominal_interval_coverage,
+            "resolved_samples": len(samples),
+            "calibration_status": "measured" if samples else "uncalibrated",
         },
     )

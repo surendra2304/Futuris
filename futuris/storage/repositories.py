@@ -486,7 +486,7 @@ class OutcomeRepository:
         stmt = (
             select(OutcomeModel, ForecastModel)
             .join(ForecastModel, OutcomeModel.forecast_id == ForecastModel.forecast_id)
-            .order_by(OutcomeModel.resolved_at.asc())
+            .order_by(OutcomeModel.resolved_at.asc(), OutcomeModel.outcome_id.asc())
             .limit(limit)
         )
         if target_prefix:

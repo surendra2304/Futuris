@@ -187,7 +187,11 @@ class Forecast(BaseModel):
     )
     intervals: list[dict[str, float]] = Field(
         default_factory=list,
-        description="Step-by-step predictive uncertainty intervals.",
+        description=(
+            "Predictive uncertainty intervals. Empirical nominal coverage is measured only "
+            "when an interval explicitly declares nominal_coverage in (0, 1); bounds alone "
+            "do not imply a nominal level."
+        ),
     )
     calibration_metrics: dict[str, float | int | bool | str] = Field(
         default_factory=dict,

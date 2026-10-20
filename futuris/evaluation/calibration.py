@@ -43,6 +43,7 @@ class CalibrationAnalyzer:
         centers: list[float] = []
         observed_freqs: list[float] = []
         counts: list[int] = []
+        bin_errors: list[float] = []
 
         for i in range(self.num_bins):
             bin_lower, bin_upper = bins[i], bins[i + 1]
@@ -54,19 +55,16 @@ class CalibrationAnalyzer:
             count = int(np.sum(mask))
             center = float(0.5 * (bin_lower + bin_upper))
             obs_freq = float(np.mean(y_true[mask])) if count > 0 else 0.0
+            if count > 0:
+                bin_errors.append(
+                    (count / len(y_prob)) * abs(obs_freq - float(np.mean(y_prob[mask])))
+                )
 
             centers.append(center)
             observed_freqs.append(round(obs_freq, 4))
             counts.append(count)
 
-        total_samples = sum(counts)
-        if total_samples > 0:
-            ece = sum(
-                (c / total_samples) * abs(f - center)
-                for c, f, center in zip(counts, observed_freqs, centers, strict=False)
-            )
-        else:
-            ece = 0.0
+        ece = sum(bin_errors)
 
         return ReliabilityCurve(
             bin_centers=centers,

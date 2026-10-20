@@ -117,6 +117,25 @@ async def test_forecast_create_and_get_round_trip(
 
 
 @pytest.mark.asyncio
+async def test_forecast_interval_nominal_coverage_round_trip(
+    test_session: AsyncSession, sample_forecast: Forecast
+):
+    """Preserve explicit interval-level metadata through forecast persistence."""
+    declared_intervals = [
+        {"step": 1.0, "lower": 1.0, "central": 2.0, "upper": 3.0, "nominal_coverage": 0.8},
+        {"step": 2.0, "lower": 0.5, "central": 2.5, "upper": 4.0, "nominal_coverage": 0.9},
+    ]
+    sample_forecast.intervals = declared_intervals
+    repo = ForecastRepository(test_session)
+
+    await repo.create(sample_forecast)
+    fetched = await repo.get(sample_forecast.forecast_id)
+
+    assert fetched is not None
+    assert fetched.intervals == declared_intervals
+
+
+@pytest.mark.asyncio
 async def test_forecast_point_in_time_query_correctness(
     test_session: AsyncSession, sample_forecast: Forecast
 ):
@@ -196,6 +215,43 @@ async def test_outcome_recording_and_unresolved_listing(
     updated_forecast = await f_repo.get(sample_forecast.forecast_id)
     assert updated_forecast is not None
     assert updated_forecast.status == ForecastStatus.RESOLVED
+
+
+@pytest.mark.asyncio
+async def test_resolved_forecast_pairs_have_deterministic_order_for_equal_timestamps(
+    test_session: AsyncSession, sample_forecast: Forecast
+):
+    forecast_repo = ForecastRepository(test_session)
+    outcome_repo = OutcomeRepository(test_session)
+    resolved_at = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
+    forecast_ids = [uuid4(), uuid4()]
+    outcome_ids = sorted([uuid4(), uuid4()], reverse=True)
+
+    for forecast_id, outcome_id in zip(forecast_ids, outcome_ids, strict=True):
+        forecast = sample_forecast.model_copy(
+            update={"forecast_id": forecast_id, "drivers": [], "evidence": []}
+        )
+        await forecast_repo.create(forecast)
+        await outcome_repo.record_outcome(
+            Outcome(
+                outcome_id=outcome_id,
+                forecast_id=forecast_id,
+                observed_value=2.0,
+                event_occurred=True,
+                resolved_at=resolved_at,
+                resolution_method=ResolutionMethod.AUTOMATIC,
+                ambiguity_note=None,
+                resolution_rule_version="test:v1",
+            )
+        )
+
+    resolved_pairs = await outcome_repo.list_resolved_with_forecasts()
+
+    expected_forecast_ids = [
+        forecast_id
+        for _, forecast_id in sorted(zip(outcome_ids, forecast_ids, strict=True))
+    ]
+    assert [forecast.forecast_id for forecast, _ in resolved_pairs] == expected_forecast_ids
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 """Tests for FRIDAY delegation endpoints, scenarios, calibration reports, and rate limiting."""
 
+from types import SimpleNamespace
+
 import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -107,10 +109,226 @@ async def test_friday_forecast_delegation_authorized(friday_test_db: AsyncSessio
         assert cal_resp.status_code == 200
         cal_data = cal_resp.json()
         assert "overall_ece" in cal_data
-        assert "service:checkout:capacity_exceedance_24h" in cal_data["per_target_type_calibration"]
-        assert cal_data["trend"] in ["improving", "degrading", "stable"]
+        assert cal_data["overall_ece"] is None
+        assert cal_data["per_target_type_calibration"] == {}
+        assert cal_data["trend"] == "insufficient_data"
+        assert cal_data["recent_accuracy_summary"]["calibration_status"] == "uncalibrated"
 
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_friday_calibration_report_uses_resolved_pairs_only() -> None:
+    from futuris.api.routers.friday import get_friday_calibration
+
+    pairs = []
+    for probability in [0.9] * 5 + [0.1] * 5:
+        pairs.append(
+            (
+                SimpleNamespace(
+                    target="service:checkout:capacity_exceedance_24h",
+                    probability=probability,
+                    range_lower=0.0,
+                    range_upper=2.0,
+                ),
+                SimpleNamespace(event_occurred=False, observed_value=1.0),
+            )
+        )
+    pairs.append(
+        (
+            SimpleNamespace(
+                target="service:uncalibrated",
+                probability=None,
+                range_lower=90.0,
+                range_upper=110.0,
+            ),
+            SimpleNamespace(event_occurred=True, observed_value=100.0),
+        )
+    )
+
+    class OutcomeRepoStub:
+        async def list_resolved_with_forecasts(self, limit: int):
+            assert limit == 5000
+            return pairs
+
+    report = await get_friday_calibration(outcome_repo=OutcomeRepoStub())
+
+    assert report.overall_ece == pytest.approx(0.5)
+    assert report.per_target_type_calibration == {
+        "service:checkout:capacity_exceedance_24h": pytest.approx(0.5)
+    }
+    assert report.trend == "improving"
+    assert report.recent_accuracy_summary == {
+        "brier_score": pytest.approx(0.41),
+        "range_coverage": 1.0,
+        "interval_sample_count": 11,
+        "nominal_interval_coverage": {},
+        "resolved_samples": 10,
+        "calibration_status": "measured",
+    }
+
+
+@pytest.mark.asyncio
+async def test_friday_calibration_measures_only_declared_nominal_intervals() -> None:
+    from futuris.api.routers.friday import get_friday_calibration
+
+    pairs = [
+        (
+            SimpleNamespace(
+                target="service:declared",
+                probability=0.5,
+                range_lower=0.0,
+                range_upper=2.0,
+                intervals=[{"nominal_coverage": 0.9, "lower": 0.0, "upper": 2.0}],
+            ),
+            SimpleNamespace(event_occurred=True, observed_value=1.0),
+        ),
+        (
+            SimpleNamespace(
+                target="service:declared",
+                probability=0.5,
+                range_lower=0.0,
+                range_upper=2.0,
+                intervals=[{"nominal_coverage": 0.9, "lower": 10.0, "upper": 20.0}],
+            ),
+            SimpleNamespace(event_occurred=False, observed_value=1.0),
+        ),
+        (
+            SimpleNamespace(
+                target="service:generic",
+                probability=0.5,
+                range_lower=0.0,
+                range_upper=2.0,
+                intervals=[{"lower": 0.0, "upper": 2.0}],
+            ),
+            SimpleNamespace(event_occurred=True, observed_value=1.0),
+        ),
+        (
+            SimpleNamespace(
+                target="service:invalid-level",
+                probability=0.5,
+                range_lower=0.0,
+                range_upper=2.0,
+                intervals=[{"nominal_coverage": 1.0, "lower": 0.0, "upper": 2.0}],
+            ),
+            SimpleNamespace(event_occurred=True, observed_value=1.0),
+        ),
+        (
+            SimpleNamespace(
+                target="service:ambiguous",
+                probability=0.5,
+                range_lower=0.0,
+                range_upper=2.0,
+                intervals=[
+                    {"nominal_coverage": 0.8, "lower": 0.0, "upper": 2.0},
+                    {"nominal_coverage": 0.8, "lower": 0.0, "upper": 2.0},
+                ],
+            ),
+            SimpleNamespace(event_occurred=True, observed_value=1.0),
+        ),
+        (
+            SimpleNamespace(
+                target="service:declared",
+                probability=0.5,
+                range_lower=0.0,
+                range_upper=2.0,
+                intervals=[{"nominal_coverage": 0.8, "lower": 0.0, "upper": 0.0}],
+            ),
+            SimpleNamespace(event_occurred=False, observed_value=1.0),
+        ),
+    ]
+
+    class OutcomeRepoStub:
+        async def list_resolved_with_forecasts(self, limit: int):
+            assert limit == 5000
+            return pairs
+
+    report = await get_friday_calibration(outcome_repo=OutcomeRepoStub())
+
+    assert report.recent_accuracy_summary["range_coverage"] == 1.0
+    assert report.recent_accuracy_summary["nominal_interval_coverage"] == {
+        "0.8": {"empirical_coverage": 0.0, "sample_count": 1},
+        "0.9": {"empirical_coverage": 0.5, "sample_count": 2},
+    }
+
+
+def test_friday_response_does_not_infer_nominal_coverage_from_range_bounds() -> None:
+    from uuid import uuid4
+
+    from futuris.api.routers.friday import (
+        FridayForecastRequest,
+        _friday_forecast_response,
+    )
+
+    forecast = SimpleNamespace(
+        probability=None,
+        predictive_distribution={},
+        range_lower=10.0,
+        range_upper=20.0,
+        prediction=15.0,
+        drivers=[],
+        calibration_metrics={},
+        forecast_id=uuid4(),
+        confidence=SimpleNamespace(value="medium"),
+        status=SimpleNamespace(value="ACTIVE"),
+        intervals=[],
+        model_metadata={},
+        assumptions=[],
+        evidence=[],
+        model_version="test:v1",
+    )
+    request = FridayForecastRequest(target="service:test")
+
+    response = _friday_forecast_response(request, forecast)
+
+    assert response.intervals == [{"lower": 10.0, "upper": 20.0}]
+    assert "nominal_coverage" not in response.intervals[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("earlier_probability", "recent_probability", "sample_count", "expected_trend"),
+    [
+        (0.20, 0.211, 10, "degrading"),
+        (0.20, 0.21, 10, "stable"),
+        (0.20, 0.30, 9, "insufficient_data"),
+    ],
+)
+async def test_friday_calibration_trend_uses_chronological_sample_halves(
+    earlier_probability: float,
+    recent_probability: float,
+    sample_count: int,
+    expected_trend: str,
+) -> None:
+    from futuris.api.routers.friday import get_friday_calibration
+
+    split_at = sample_count // 2
+    probabilities = [earlier_probability] * split_at + [recent_probability] * (
+        sample_count - split_at
+    )
+    # The repository returns resolved pairs oldest first; recent samples are
+    # therefore in the second half.
+    pairs = [
+        (
+            SimpleNamespace(
+                target="service:checkout:capacity_exceedance_24h",
+                probability=probability,
+                range_lower=0.0,
+                range_upper=2.0,
+            ),
+            SimpleNamespace(event_occurred=False, observed_value=1.0),
+        )
+        for probability in probabilities
+    ]
+
+    class OutcomeRepoStub:
+        async def list_resolved_with_forecasts(self, limit: int):
+            assert limit == 5000
+            return pairs
+
+    report = await get_friday_calibration(outcome_repo=OutcomeRepoStub())
+
+    assert report.trend == expected_trend
 
 
 @pytest.mark.asyncio
