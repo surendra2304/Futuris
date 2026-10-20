@@ -8,7 +8,6 @@ __pycache__/
 # Distribution & build
 build/
 develop-eggs/
-dist/
 /dist/
 !futuris/ui/dist/**
 downloads/
