@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,6 +13,10 @@ class Observation(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    observation_id: UUID = Field(
+        default_factory=uuid4,
+        description="Unique identifier for the observation record.",
+    )
     observed_at: datetime = Field(
         ...,
         description="Point-in-time UTC timestamp when the observation occurred.",

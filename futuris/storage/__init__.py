@@ -20,6 +20,7 @@ from futuris.storage.repositories import (
     ForecastRepository,
     ModelPromotionError,
     ModelRepository,
+    ObservationRepository,
     OutcomeRepository,
     ReadOnlyAuditViolationError,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "ModelRegistryModel",
     "ModelRepository",
     "ObservationModel",
+    "ObservationRepository",
     "OutcomeModel",
     "OutcomeRepository",
     "ReadOnlyAuditViolationError",

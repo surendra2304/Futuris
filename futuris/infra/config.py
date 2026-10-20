@@ -50,6 +50,26 @@ class Settings(BaseSettings):
         default="sqlite+aiosqlite:///./data/futuris.db",
         description="Async connection string for database (SQLite or PostgreSQL).",
     )
+    POSTGRES_HOST: str = Field(
+        default="dokploy-postgres",
+        description="Dokploy PostgreSQL host",
+    )
+    POSTGRES_PORT: int = Field(
+        default=5432,
+        description="Dokploy PostgreSQL port",
+    )
+    POSTGRES_DB: str = Field(
+        default="futuris_db",
+        description="Dokploy PostgreSQL database name",
+    )
+    POSTGRES_USER: str = Field(
+        default="futuris_user",
+        description="Dokploy PostgreSQL username",
+    )
+    POSTGRES_PASSWORD: str | None = Field(
+        default=None,
+        description="Dokploy PostgreSQL password",
+    )
     OBJECT_STORE_PATH: str = Field(
         default="./data/storage",
         description="Local or mounted directory path for evidence and snapshot storage.",
@@ -188,11 +208,20 @@ class Settings(BaseSettings):
             "http://localhost:8000",
             "http://127.0.0.1:8000",
             "http://localhost:8003",
+            "http://localhost:8004",
             "http://localhost:3000",
         ],
         description="Allowed CORS origin domains.",
     )
 
+    @property
+    def postgres_async_url(self) -> str:
+        """Construct standard production PostgreSQL asyncpg connection URL."""
+        pw = self.POSTGRES_PASSWORD or "jK8qbCVzXpbP54t0yAvk-1KX"
+        return (
+            f"postgresql+asyncpg://{self.POSTGRES_USER}:{pw}"
+            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        )
 
     def validate_production_safety(self) -> None:
         """Enforce safe_config checks if running under production environment."""

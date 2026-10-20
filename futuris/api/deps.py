@@ -12,8 +12,10 @@ from futuris.storage import db as storage_db
 from futuris.storage.db import safe_rollback
 from futuris.storage.repositories import (
     EventRepository,
+    EvidenceRepository,
     ForecastRepository,
     ModelRegistryRepository,
+    ObservationRepository,
     OutcomeRepository,
     ScenarioRepository,
 )
@@ -72,6 +74,14 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 def get_forecast_repo(session: AsyncSession = Depends(get_db_session)) -> ForecastRepository:
     return ForecastRepository(session)
+
+
+def get_evidence_repo(session: AsyncSession = Depends(get_db_session)) -> EvidenceRepository:
+    return EvidenceRepository(session)
+
+
+def get_observation_repo(session: AsyncSession = Depends(get_db_session)) -> ObservationRepository:
+    return ObservationRepository(session)
 
 
 def get_outcome_repo(session: AsyncSession = Depends(get_db_session)) -> OutcomeRepository:

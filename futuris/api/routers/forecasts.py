@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from futuris.api.deps import (
     get_event_repo,
@@ -171,10 +171,19 @@ class ForecastResponse(BaseModel):
     created_at: datetime | None = None
     evidence_class: EvidenceClass = EvidenceClass.SYNTHETIC
     evidence_source: str | None = None
+    input_telemetry_verified: bool = Field(
+        default=False,
+        description="Strict input provenance gate: True only when evidence_class is live.",
+    )
     prediction_is_not_authorization: bool = Field(
         default=True,
         description="Architectural invariant: a forecast never grants execution authority.",
     )
+
+    @model_validator(mode="after")
+    def _validate_telemetry_provenance(self) -> "ForecastResponse":
+        self.input_telemetry_verified = (self.evidence_class == EvidenceClass.LIVE)
+        return self
     executable_commands: list[str] = Field(
         default_factory=list,
         description="Always empty by construction; Futuris never emits runnable commands.",

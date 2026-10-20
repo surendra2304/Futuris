@@ -20,8 +20,10 @@ from futuris.evaluation.drift import DriftMonitor
 from futuris.infra.events import EventEmitter, event_emitter
 from futuris.infra.logging import get_logger
 from futuris.storage.repositories import (
+    EvaluationRepository,
     EventRepository,
     ForecastRepository,
+    ObservationRepository,
     OutcomeRepository,
 )
 from futuris.upgrade.scheduler import DistributedLeaseTable, SafeScheduler
@@ -49,6 +51,8 @@ class ForecastScheduler:
         forecast_repo: ForecastRepository | None = None,
         outcome_repo: OutcomeRepository | None = None,
         event_repo: EventRepository | None = None,
+        observation_repo: ObservationRepository | None = None,
+        evaluation_repo: EvaluationRepository | None = None,
         emitter: EventEmitter | None = None,
         pipeline: ForecastingPipeline | None = None,
         agent_runner: AgentRunner | None = None,
@@ -59,6 +63,8 @@ class ForecastScheduler:
         self.forecast_repo = forecast_repo
         self.outcome_repo = outcome_repo
         self.event_repo = event_repo
+        self.observation_repo = observation_repo
+        self.evaluation_repo = evaluation_repo
         self.emitter = emitter or event_emitter
         # The unattended pipeline reads from the configured telemetry source
         # (FUTURIS_TELEMETRY_SOURCE), not a hardcoded synthetic generator.
@@ -91,11 +97,13 @@ class ForecastScheduler:
         return prob_diff < delta_prob_threshold and pred_diff < delta_pred_threshold
 
     async def ingest_job(self) -> int:
-        """Scheduled ingestion job pulling fresh telemetry."""
+        """Scheduled ingestion job pulling fresh telemetry and persisting observations."""
         logger.info("ingest_job_started")
         connector = build_scheduler_connector()
         now = datetime.now(UTC)
         obs = await connector.fetch(now - timedelta(days=1), now)
+        if self.observation_repo and obs:
+            await self.observation_repo.record_batch(obs)
         logger.info("ingest_job_completed", points=len(obs))
         return len(obs)
 
@@ -200,6 +208,99 @@ class ForecastScheduler:
                         samples=len(window),
                     )
 
+    async def calibration_sweep_job(self) -> dict[str, Any]:
+        """Scheduled calibration sweep comparing realized outcomes with historical forecasts.
+
+        Enforces Safety Invariant 3 (Brier Score Penalization):
+        Computes Brier calibration scores on resolved forecasts and penalizes overconfidence
+        by conformally widening uncertainty intervals.
+        """
+        logger.info("calibration_sweep_job_started")
+        from futuris.core.resolution import outcome_resolver
+        from futuris.evaluation.calibration import CalibrationAnalyzer
+
+        now = datetime.now(UTC)
+        resolved_count = 0
+
+        # 1. Resolve expired forecasts against observations
+        if self.outcome_repo:
+            unresolved = await self.outcome_repo.list_unresolved(past_horizon=True)
+            if unresolved:
+                connector = build_scheduler_connector()
+                earliest = min(f.as_of for f in unresolved)
+                obs = await connector.fetch(earliest, now)
+                df = pd.DataFrame([{"timestamp": o.observed_at, "value": o.value} for o in obs])
+
+                for f in unresolved:
+                    try:
+                        outcome = outcome_resolver.resolve_forecast(f, df)
+                        await self.outcome_repo.record_outcome(outcome)
+                        resolved_count += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "calibration_resolve_failed",
+                            forecast_id=str(f.forecast_id),
+                            error=str(exc),
+                        )
+
+        # 2. Compute Brier calibration metrics across resolved pairs
+        analyzer = CalibrationAnalyzer()
+        metrics: dict[str, Any] = {
+            "brier_score": 0.0,
+            "ece": 0.0,
+            "resolved_count": resolved_count,
+            "overconfidence_penalized": False,
+            "interval_expansion_factor": 1.0,
+        }
+
+        if self.outcome_repo:
+            pairs = await self.outcome_repo.list_resolved_with_forecasts(limit=1000)
+            probs: list[float] = []
+            actuals: list[bool] = []
+
+            for f, o in pairs:
+                if f.probability is not None and o.event_occurred is not None:
+                    probs.append(float(f.probability))
+                    actuals.append(bool(o.event_occurred))
+
+            if probs and actuals:
+                cal_metrics = analyzer.update_calibration_metrics(probs, actuals)
+                brier = cal_metrics.get("brier_score", 0.0)
+                ece = cal_metrics.get("ece", 0.0)
+                metrics.update(cal_metrics)
+
+                # Overconfidence penalty: if Brier score > 0.20 or ECE > 0.10,
+                # mark penalty and compute interval expansion factor
+                if brier > 0.20 or ece > 0.10:
+                    metrics["overconfidence_penalized"] = True
+                    metrics["interval_expansion_factor"] = round(1.0 + max(0.0, (brier - 0.20) * 2.0), 3)
+                    logger.warning(
+                        "calibration_overconfidence_detected",
+                        brier_score=brier,
+                        ece=ece,
+                        expansion_factor=metrics["interval_expansion_factor"],
+                    )
+                else:
+                    metrics["overconfidence_penalized"] = False
+                    metrics["interval_expansion_factor"] = 1.0
+
+                # 3. Record evaluation run
+                if self.evaluation_repo:
+                    model_v = pairs[0][0].model_version if pairs else "statsforecast.AutoARIMA:v1.0"
+                    eval_metrics = {
+                        "brier_score": float(metrics.get("brier_score", 0.0)),
+                        "ece": float(metrics.get("ece", 0.0)),
+                        "interval_expansion_factor": float(metrics.get("interval_expansion_factor", 1.0)),
+                    }
+                    await self.evaluation_repo.save_run(
+                        model_version=model_v,
+                        dataset_name="live_telemetry_calibration",
+                        metrics=eval_metrics,
+                    )
+
+        logger.info("calibration_sweep_job_completed", metrics=metrics)
+        return metrics
+
     def start(self) -> None:
         """Start scheduler with registered recurring jobs."""
         self.scheduler.add_job(self.ingest_job, "interval", minutes=15, id="ingest_job")
@@ -208,6 +309,9 @@ class ForecastScheduler:
         )
         self.scheduler.add_job(
             self.lifecycle_sweep_job, "interval", minutes=30, id="lifecycle_sweep_job"
+        )
+        self.scheduler.add_job(
+            self.calibration_sweep_job, "interval", minutes=30, id="calibration_sweep_job"
         )
         self.scheduler.add_job(self.backtest_nightly_job, "cron", hour=2, id="backtest_nightly_job")
         self.scheduler.start()

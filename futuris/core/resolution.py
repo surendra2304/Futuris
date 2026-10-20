@@ -58,8 +58,8 @@ class CapacityExceedanceResolutionRuleV1:
         evidence_snapshot_data: pd.DataFrame | None = None,
         max_allowed_gap_pct: float = 20.0,
     ) -> Outcome:
-        as_of = forecast.as_of
-        expires_at = forecast.expires_at
+        as_of = pd.to_datetime(forecast.as_of, utc=True)
+        expires_at = pd.to_datetime(forecast.expires_at, utc=True)
 
         # Ensure datetime index in UTC
         df = observation_records.copy()
