@@ -1,5 +1,6 @@
 """Evidence snapshotting, immutable dataset freezing, and PII data minimization."""
 
+import contextlib
 import hashlib
 import os
 import stat
@@ -60,10 +61,8 @@ class EvidenceSnapshotter:
 
     def _mark_file_read_only(self, path: Path) -> None:
         """Set read-only permissions on frozen parquet snapshot."""
-        try:
+        with contextlib.suppress(Exception):
             os.chmod(path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
-        except Exception:
-            pass
 
     def freeze_snapshot(
         self,

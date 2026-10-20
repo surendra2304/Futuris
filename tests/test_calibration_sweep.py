@@ -1,4 +1,4 @@
-"""Tests for telemetry ingestion, calibration sweeps, and Brier score overconfidence penalization."""
+"""Tests for telemetry ingestion, calibration sweeps, and Brier penalization."""
 
 import os
 from datetime import UTC, datetime, timedelta
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from futuris.connectors.base import Observation
 from futuris.core.enums import ConfidenceLevel, EvidenceClass, ForecastStatus
-from futuris.core.schemas import Forecast, Outcome
+from futuris.core.schemas import Forecast
 from futuris.infra.scheduler import ForecastScheduler
 from futuris.storage.models import Base
 from futuris.storage.repositories import (
@@ -75,7 +75,9 @@ async def test_ingest_job_persists_observations(db_session: AsyncSession) -> Non
 
 
 @pytest.mark.asyncio
-async def test_calibration_sweep_resolves_and_penalizes_overconfidence(db_session: AsyncSession) -> None:
+async def test_calibration_sweep_resolves_and_penalizes_overconfidence(
+    db_session: AsyncSession,
+) -> None:
     f_repo = ForecastRepository(db_session)
     o_repo = OutcomeRepository(db_session)
     eval_repo = EvaluationRepository(db_session)
@@ -138,7 +140,7 @@ async def test_calibration_sweep_resolves_and_penalizes_overconfidence(db_sessio
 
 
 @pytest.mark.asyncio
-async def test_scheduler_registers_calibration_sweep() -> None:
+async def test_scheduler_registers_and_shuts_down() -> None:
     scheduler = ForecastScheduler()
     scheduler.start()
     try:
@@ -147,4 +149,14 @@ async def test_scheduler_registers_calibration_sweep() -> None:
         assert "ingest_job" in job_ids
         assert "forecast_refresh_job" in job_ids
     finally:
-        scheduler.scheduler.shutdown(wait=False)
+        await scheduler.shutdown()
+        assert not scheduler.scheduler.running
+
+
+@pytest.mark.asyncio
+async def test_scheduler_forecast_refresh_job(db_session: AsyncSession) -> None:
+    f_repo = ForecastRepository(db_session)
+    scheduler = ForecastScheduler(forecast_repo=f_repo)
+    refreshed = await scheduler.forecast_refresh_job()
+    assert len(refreshed) >= 1
+    assert refreshed[0].target == "service:checkout:capacity_exceedance_24h"

@@ -80,6 +80,34 @@ async def test_forecast_crud_cycle(db_session: AsyncSession) -> None:
     assert len(listed) >= 1
     assert listed[0].forecast_id == forecast_id
 
+    # Test idempotency key lookup
+    f_idem = Forecast(
+        forecast_id=uuid4(),
+        target="service:checkout:capacity_exceedance_24h",
+        as_of=now,
+        horizon=timedelta(hours=24),
+        expires_at=now + timedelta(hours=24),
+        prediction=105.0,
+        range_lower=95.0,
+        range_upper=115.0,
+        confidence=ConfidenceLevel.HIGH,
+        model_version="statsforecast.AutoARIMA:v1.0",
+        review_at=now + timedelta(hours=12),
+        status=ForecastStatus.ACTIVE,
+        idempotency_key="key:checkout:test_123",
+    )
+    await forecast_repo.create(f_idem, idempotency_key="key:checkout:test_123")
+    found = await forecast_repo.get_by_idempotency_key("key:checkout:test_123")
+    assert found is not None
+    assert found.forecast_id == f_idem.forecast_id
+
+    # Test status filtering
+    active_list = await forecast_repo.list_by_status(ForecastStatus.ACTIVE)
+    assert len(active_list) >= 2
+    statuses = [ForecastStatus.ACTIVE, ForecastStatus.EXPIRED]
+    multi_status = await forecast_repo.list_by_statuses(statuses)
+    assert len(multi_status) >= 2
+
     # Test delete
     deleted = await forecast_repo.delete(forecast_id)
     assert deleted is True
@@ -183,6 +211,14 @@ async def test_observation_repository_crud(db_session: AsyncSession) -> None:
     # Verify ordered newest first
     assert series_obs[0].value == 1650.0
     assert series_obs[1].value == 1500.0
+
+    # Query series with date ranges
+    filtered_since = await obs_repo.list_by_series(
+        "service:checkout:requests_per_second",
+        since=now - timedelta(minutes=2),
+    )
+    assert len(filtered_since) == 1
+    assert filtered_since[0].value == 1650.0
 
     # Get latest
     latest = await obs_repo.get_latest("service:checkout:requests_per_second")

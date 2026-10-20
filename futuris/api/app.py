@@ -521,7 +521,10 @@ async def quick_forecast(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     from futuris.core.enums import EvidenceClass
 
     ev_class = getattr(f, "evidence_class", None)
-    ev_val = ev_class.value if hasattr(ev_class, "value") else (str(ev_class) if ev_class else "synthetic")
+    if hasattr(ev_class, "value"):
+        ev_val = ev_class.value
+    else:
+        ev_val = str(ev_class) if ev_class else "synthetic"
     is_live = ev_val == "live" or ev_class == EvidenceClass.LIVE
 
     result = {

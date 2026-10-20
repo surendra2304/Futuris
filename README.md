@@ -17,11 +17,12 @@ FUTURIS is deployed on an Oracle Cloud Always Free host (Ampere A1 ARM64 / AMD x
 | :--- | :--- | :--- |
 | **Identity** | `futuris` | Temporal modeling & predictive intelligence engine |
 | **Internal Container Port** | `8000` | Port bound inside the container |
-| **Host Port Mapping** | `8003:8000` | Host port on Oracle Cloud instance |
+| **Host Port Mapping** | `8004:8000` | Host port on Oracle Cloud instance |
 | **Docker Mesh URL** | `http://futuris:8000` | Private container mesh address within `friday_mesh` |
 | **Public Gateway Route** | `https://friday-universe.duckdns.org/futuris/*` | Reverse-proxy routed via Caddy |
 | **FRIDAY Core Gateway** | `http://friday:10000` | Primary ecosystem orchestrator |
-| **Target Runtime** | Python 3.11+ / FastAPI / SQLite 3 WAL | Non-root container (`appuser`, UID 1000) |
+| **Database Engines** | PostgreSQL (`futuris_db`) / SQLite 3 WAL | `dokploy-postgres` & high-concurrency local WAL |
+| **Target Runtime** | Python 3.11+ / FastAPI | Non-root container (`appuser`, UID 1000) |
 
 ```
                               [ Internet / Public Clients ]
@@ -37,7 +38,7 @@ FUTURIS is deployed on an Oracle Cloud Always Free host (Ampere A1 ARM64 / AMD x
           ▼                                                          ▼
 ┌───────────────────────────────┐                          ┌──────────────────┐
 │   FUTURIS Specialist (8000)   │ ◄──── friday_mesh ─────► │   FRIDAY Core    │
-│   Host Port: 8003             │                          │   Port: 10000    │
+│   Host Port: 8004             │                          │   Port: 10000    │
 └──────────────┬────────────────┘                          └──────────────────┘
                │
                ▼
@@ -50,19 +51,22 @@ FUTURIS is deployed on an Oracle Cloud Always Free host (Ampere A1 ARM64 / AMD x
 
 ---
 
-## 💾 Database Storage & SQLite WAL Hardening
+## 💾 Production Database Storage (PostgreSQL & SQLite WAL)
 
-FUTURIS uses an optimized, local file-backed **SQLite 3** storage engine designed for high-concurrency read/write operations without deadlocks or memory leaks.
+FUTURIS supports production-grade dual persistence:
+1. **Production PostgreSQL (`dokploy-postgres`)**:
+   - Host: `dokploy-postgres:5432`, Database: `futuris_db`, User: `futuris_user`
+   - Connection: `asyncpg` async driver with pool recycling, keepalives, and pre-ping checks.
+   - 12 Provisioned Tables: `forecasts`, `evidence_refs`, `observations`, `outcomes`, `scenarios`, `forecast_events`, `model_registry`, `evaluation_runs`, `intelx_notices`, `signal_sources`, `api_keys`, `audit_logs`.
+2. **Local High-Concurrency SQLite 3 WAL Mode**:
+   - Storage Location: `data/futuris.db`
+   - WAL Mode: `PRAGMA journal_mode=WAL;` and `PRAGMA busy_timeout=30000;` to absorb concurrent bursts.
+   - Graceful Shutdown: `SIGTERM`/`SIGINT` trapping with `PRAGMA wal_checkpoint(TRUNCATE);`.
 
-- **Storage Location**: `data/futuris.db`
-- **Write-Ahead Logging (WAL)**: All database connections execute `PRAGMA journal_mode=WAL;` to allow non-blocking concurrent reads while write transactions are processing.
-- **Concurrency Protections**:
-  - `PRAGMA busy_timeout=30000;`: Waits up to 30 seconds to absorb burst concurrent write spikes without contention failures.
-  - `PRAGMA synchronous=NORMAL;`: Maximizes I/O throughput on modern filesystems while preserving durability.
-  - `PRAGMA foreign_keys=ON;`: Guarantees relational integrity across forecast horizons, outcomes, and scenario mutations.
-- **Graceful Shutdown & Signal Trapping**:
-  - Catches `SIGTERM` and `SIGINT` signals.
-  - Executes `PRAGMA wal_checkpoint(TRUNCATE);` and disposes async SQLAlchemy engine connections during lifespan teardown and process exit, guaranteeing a zero-data-loss, cleanly truncated database on restart.
+### 🛡️ Core Safety Invariants
+- **Safety Invariant 1 (Strict Advisory Invariant)**: Forecasts are probabilistic advisory insights only (`prediction_is_not_authorization: true`). They strictly cannot execute trades, mutate servers, or release software autonomously (`executable_commands: []`).
+- **Safety Invariant 2 (Input Provenance Gate)**: Predictions require verified live input telemetry. The UI strictly withholds numerical forecast values (`WITHHELD [Unverified Input Telemetry]`) whenever evidence class is synthetic or unverified, and surfaces a dedicated `VERIFIED LIVE INPUT` badge only for live telemetry.
+- **Safety Invariant 3 (Brier Score Penalization)**: Historical calibration penalizes overconfidence. Calibration sweeps compute Brier scores and ECE across resolved outcomes, automatically widening uncertainty intervals `[range_lower, range_upper]` when overconfidence is detected.
 
 ---
 

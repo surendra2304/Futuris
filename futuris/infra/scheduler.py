@@ -273,7 +273,8 @@ class ForecastScheduler:
                 # mark penalty and compute interval expansion factor
                 if brier > 0.20 or ece > 0.10:
                     metrics["overconfidence_penalized"] = True
-                    metrics["interval_expansion_factor"] = round(1.0 + max(0.0, (brier - 0.20) * 2.0), 3)
+                    expansion = round(1.0 + max(0.0, (brier - 0.20) * 2.0), 3)
+                    metrics["interval_expansion_factor"] = expansion
                     logger.warning(
                         "calibration_overconfidence_detected",
                         brier_score=brier,
@@ -286,11 +287,15 @@ class ForecastScheduler:
 
                 # 3. Record evaluation run
                 if self.evaluation_repo:
-                    model_v = pairs[0][0].model_version if pairs else "statsforecast.AutoARIMA:v1.0"
+                    model_v = (
+                        pairs[0][0].model_version if pairs else "statsforecast.AutoARIMA:v1.0"
+                    )
                     eval_metrics = {
                         "brier_score": float(metrics.get("brier_score", 0.0)),
                         "ece": float(metrics.get("ece", 0.0)),
-                        "interval_expansion_factor": float(metrics.get("interval_expansion_factor", 1.0)),
+                        "interval_expansion_factor": float(
+                            metrics.get("interval_expansion_factor", 1.0)
+                        ),
                     }
                     await self.evaluation_repo.save_run(
                         model_version=model_v,
@@ -321,7 +326,8 @@ class ForecastScheduler:
         """Gracefully drain running jobs and shutdown scheduler."""
         logger.info("scheduler_shutdown_requested")
         if self.scheduler.running:
-            self.scheduler.shutdown(wait=True)
+            self.scheduler.shutdown(wait=False)
+            await asyncio.sleep(0.01)
         if self._in_flight_tasks:
             await asyncio.gather(*self._in_flight_tasks, return_exceptions=True)
         logger.info("scheduler_shutdown_complete")
