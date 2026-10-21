@@ -74,6 +74,28 @@ def test_zero_probability_is_preserved_without_neutral_default() -> None:
     assert response.calibration_score is None
 
 
+def test_missing_probability_does_not_reuse_distribution_probability() -> None:
+    forecast = _forecast(
+        status=ForecastStatus.ACTIVE,
+        confidence=ConfidenceLevel.HIGH,
+        prediction=12.0,
+        range_lower=10.0,
+        range_upper=14.0,
+        probability=None,
+        predictive_distribution={
+            "exceedance_probability": 0.5,
+            "p10": 10.0,
+            "p50": 12.0,
+            "p90": 14.0,
+        },
+    )
+    response = _friday_forecast_response(_request(), forecast)
+
+    assert response.prediction.probability_distribution is not None
+    assert "exceedance_probability" not in response.prediction.probability_distribution
+    assert response.evidence_class is None
+
+
 def test_calibration_requires_finite_measured_ece_and_positive_sample_count() -> None:
     from futuris.api.routers.friday import _honest_calibration
 
