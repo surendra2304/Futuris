@@ -15,12 +15,14 @@ from futuris.models.diffusion_forecaster import (
 )
 from futuris.models.registry import ModelRegistry, model_registry
 from futuris.models.routing import ModelRouter, SeriesMetadata
+from futuris.models.volatility_forecaster import GARCHVolatilityModelAdapter
 
 __all__ = [
     "AutoARIMAAdapter",
     "AutoETSAdapter",
     "BassDiffusionModelAdapter",
     "DriftAdapter",
+    "GARCHVolatilityModelAdapter",
     "HawkesProcessCascadeAdapter",
     "MeanEnsembleAdapter",
     "ModelAdapter",
