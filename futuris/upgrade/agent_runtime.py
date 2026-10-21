@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from .cancellation import CancellationToken
+from .cancellation import CancellationToken, await_or_cancel
 from .models import JobState
 from .state import StateMachine
 
@@ -21,8 +21,12 @@ class AgentRuntime:
     """Bounded, cancellable agent loop suitable for Futuris advisory agents."""
 
     def __init__(self, max_iterations: int = 8) -> None:
-        if max_iterations < 1:
-            raise ValueError("max_iterations must be positive")
+        if (
+            isinstance(max_iterations, bool)
+            or not isinstance(max_iterations, int)
+            or max_iterations < 1
+        ):
+            raise ValueError("max_iterations must be a positive integer")
         self.max_iterations = max_iterations
 
     async def run(
@@ -31,7 +35,7 @@ class AgentRuntime:
         *,
         token: CancellationToken | None = None,
     ) -> AgentRunResult:
-        token = token or CancellationToken()
+        token = token if token is not None else CancellationToken()
         machine = StateMachine(JobState.CREATED)
         current = await machine.snapshot()
         await machine.transition(current.version, JobState.QUEUED)
@@ -43,7 +47,7 @@ class AgentRuntime:
             for iteration in range(1, self.max_iterations + 1):
                 token.throw_if_cancelled()
                 attempts += 1
-                result = await work(iteration)
+                result = await await_or_cancel(work(iteration), token)
                 if result is not None:
                     snap = await machine.snapshot()
                     await machine.transition(snap.version, JobState.SUCCEEDED)
