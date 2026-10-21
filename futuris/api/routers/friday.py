@@ -402,8 +402,8 @@ def _friday_forecast_response(
         else "no_evidence_frozen",
         model_used=forecast.model_version,
         drivers_identified=drivers,
-        evidence_class=forecast.evidence_class if scorable else None,
-        evidence_source=forecast.evidence_source if scorable else None,
+        evidence_class=getattr(forecast, "evidence_class", None) if scorable else None,
+        evidence_source=getattr(forecast, "evidence_source", None) if scorable else None,
     )
 
 
