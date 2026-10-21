@@ -298,7 +298,11 @@ class TradingBotConnector(BaseConnector):
                                     if 3 <= len(clean) <= 15:
                                         discovered.add(clean)
                     except Exception as err:
-                        logger.debug("trade_pair_discovery_endpoint_failed", endpoint=ep, error=str(err))
+                        logger.debug(
+                            "trade_pair_discovery_endpoint_failed",
+                            endpoint=ep,
+                            error=str(err),
+                        )
                         continue
         except Exception as exc:
             logger.warning("trade_pair_discovery_failed", error=str(exc))
@@ -343,20 +347,40 @@ class TradingBotConnector(BaseConnector):
                     if isinstance(raw_list, list):
                         for p in raw_list:
                             if isinstance(p, dict) and p.get("symbol"):
+                                sym_val = (
+                                    str(p["symbol"])
+                                    .upper()
+                                    .replace("-", "")
+                                    .replace("/", "")
+                                )
+                                curr_price = float(
+                                    p.get("current_price")
+                                    or p.get("mark_price")
+                                    or p.get("price")
+                                    or 0.0
+                                )
                                 positions.append(
                                     {
-                                        "symbol": str(p["symbol"]).upper().replace("-", "").replace("/", ""),
+                                        "symbol": sym_val,
                                         "side": str(p.get("side", "LONG")).upper(),
                                         "size": float(p.get("size") or p.get("quantity") or 1.0),
-                                        "entry_price": float(p.get("entry_price") or p.get("entry") or 0.0),
-                                        "current_price": float(
-                                            p.get("current_price") or p.get("mark_price") or p.get("price") or 0.0
+                                        "entry_price": float(
+                                            p.get("entry_price") or p.get("entry") or 0.0
                                         ),
-                                        "unrealized_pnl": float(p.get("unrealized_pnl") or p.get("pnl") or 0.0),
+                                        "current_price": curr_price,
+                                        "unrealized_pnl": float(
+                                            p.get("unrealized_pnl") or p.get("pnl") or 0.0
+                                        ),
                                         "leverage": int(p.get("leverage") or 1),
-                                        "liquidation_price": float(p.get("liquidation_price") or 0.0),
-                                        "margin": float(p.get("margin") or p.get("collateral") or 0.0),
-                                        "updated_at": p.get("updated_at") or datetime.now(UTC).isoformat(),
+                                        "liquidation_price": float(
+                                            p.get("liquidation_price") or 0.0
+                                        ),
+                                        "margin": float(
+                                            p.get("margin") or p.get("collateral") or 0.0
+                                        ),
+                                        "updated_at": (
+                                            p.get("updated_at") or datetime.now(UTC).isoformat()
+                                        ),
                                     }
                                 )
         except Exception as exc:
