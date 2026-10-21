@@ -38,7 +38,18 @@ async def test_peer_probe_reports_http_evidence_and_server_observation(monkeypat
 
     peers = await EcosystemAdapter().probe_peers()
 
-    assert len(peers) == 9
+    expected_peers = {
+        "IntelX",
+        "Inference",
+        "Memora",
+        "Stratex",
+        "Sentinel",
+        "Cortex",
+        "Forge",
+        "FRIDAY",
+        "VyralX",
+    }
+    assert {peer["name"] for peer in peers} == expected_peers
     assert peers[0]["status"] == "online"
     assert peers[0]["evidence_class"] == "http_health_200"
     assert peers[0]["http_status"] == 200
