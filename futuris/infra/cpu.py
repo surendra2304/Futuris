@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 import weakref
-import threading
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from functools import partial
@@ -171,7 +171,7 @@ def _process_gate() -> asyncio.Semaphore:
     return gate
 
 
-def _process_job_finished(kind: str, future: Future[Any]) -> None:
+def _process_job_finished(kind: str, _future: Future[Any]) -> None:
     """Update counters only when the submitted process work really finishes."""
     global _process_pending
     CPU_WORK_IN_FLIGHT.labels(kind).dec()
