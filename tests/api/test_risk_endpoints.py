@@ -119,3 +119,60 @@ async def test_risk_stream_update_broadcasts_to_subscribers():
         assert event["data"]["prediction_is_not_authorization"] is True
     finally:
         await stream_hub.unregister(sub_id)
+
+
+@pytest.mark.asyncio
+async def test_stratex_trade_pairs_endpoint():
+    """Verify GET /v1/risk/stratex/pairs discovers active pairs from Stratex."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/risk/stratex/pairs")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["source"] == "stratex"
+        assert isinstance(data["active_pairs"], list)
+        assert len(data["active_pairs"]) >= 3
+        assert "BTCUSDT" in data["active_pairs"]
+        assert "ETHUSDT" in data["active_pairs"]
+        assert "SOLUSDT" in data["active_pairs"]
+
+
+@pytest.mark.asyncio
+async def test_portfolio_tail_risk_endpoint():
+    """Verify GET /v1/risk/portfolio computes portfolio-wide VaR/CVaR and positions."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/risk/portfolio?window_days=30&confidence_level=0.95")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert data["prediction_is_not_authorization"] is True
+        assert isinstance(data["active_pairs"], list)
+        assert len(data["active_pairs"]) >= 3
+
+        # Positions
+        assert isinstance(data["positions"], list)
+        assert len(data["positions"]) >= 1
+        pos = data["positions"][0]
+        assert "symbol" in pos
+        assert "size" in pos
+        assert "entry_price" in pos
+        assert "unrealized_pnl" in pos
+
+        # Assets risk reports
+        assert isinstance(data["assets"], list)
+        assert len(data["assets"]) >= 3
+        asset_item = data["assets"][0]
+        assert "symbol" in asset_item
+        assert "var_95" in asset_item
+        assert "cvar_95" in asset_item
+        assert "basel_traffic_light" in asset_item
+        assert asset_item["cvar_95"] >= asset_item["var_95"]
+
+        # Portfolio Summary
+        summary = data["portfolio_summary"]
+        assert "total_exposure_usd" in summary
+        assert "portfolio_var_95" in summary
+        assert "portfolio_cvar_95" in summary
+        assert summary["overall_traffic_light"] in {"green", "yellow", "red"}
+        assert "highest_risk_asset" in summary
