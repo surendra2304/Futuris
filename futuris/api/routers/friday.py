@@ -214,7 +214,7 @@ class FridayForecastResponse(BaseModel):
     evidence_snapshot_id: str
     model_used: str
     drivers_identified: list[DriverItem]
-    evidence_class: EvidenceClass = EvidenceClass.SYNTHETIC
+    evidence_class: EvidenceClass | None = None
     evidence_source: str | None = None
 
     @field_validator("prediction_is_not_authorization")
@@ -370,6 +370,8 @@ def _friday_forecast_response(
         # neutral 0.5 default. Omit the field when no probability was measured.
         if probability is not None:
             prob_dist["exceedance_probability"] = float(probability)
+        else:
+            prob_dist.pop("exceedance_probability", None)
 
     cal_score, cal_metrics = _honest_calibration(forecast)
     return FridayForecastResponse(
@@ -400,6 +402,8 @@ def _friday_forecast_response(
         else "no_evidence_frozen",
         model_used=forecast.model_version,
         drivers_identified=drivers,
+        evidence_class=forecast.evidence_class if scorable else None,
+        evidence_source=forecast.evidence_source if scorable else None,
     )
 
 
