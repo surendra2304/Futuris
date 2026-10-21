@@ -2,6 +2,7 @@ import asyncio
 import hmac
 import time
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from futuris.api.deps import get_db_session, get_event_repo, get_outcome_repo
 from futuris.core.enums import (
+    ConfidenceLevel,
     EvidenceClass,
     ForecastEventType,
     ForecastStatus,
@@ -129,10 +131,10 @@ class DriverItem(BaseModel):
 
 
 class PredictionPayload(BaseModel):
-    point_estimate: float
-    lower_bound: float
-    upper_bound: float
-    probability_distribution: dict[str, float]
+    point_estimate: float | None
+    lower_bound: float | None
+    upper_bound: float | None
+    probability_distribution: dict[str, float] | None = None
 
 
 class FridayForecastRequest(BaseModel):
@@ -150,7 +152,7 @@ class FridayForecastRequest(BaseModel):
     allow_stale: bool = False
 
 
-def _honest_calibration(forecast: Any) -> tuple[float, dict[str, Any]]:
+def _honest_calibration(forecast: Any) -> tuple[float | None, dict[str, Any]]:
     """Calibration score/metrics taken from measured data, or declared unmeasured.
 
     The stored ``calibration_metrics`` are produced by the calibration analyzer
@@ -165,7 +167,12 @@ def _honest_calibration(forecast: Any) -> tuple[float, dict[str, Any]]:
     except (TypeError, ValueError):
         resolved = 0
     ece = metrics.get("ece", metrics.get("ece_score"))
-    has_ece = isinstance(ece, (int, float)) and not isinstance(ece, bool)
+    has_ece = (
+        isinstance(ece, (int, float))
+        and not isinstance(ece, bool)
+        and isfinite(ece)
+        and 0.0 <= ece <= 1.0
+    )
 
     if resolved <= 0 or not has_ece:
         # Nothing was measured for this target. Report only what is actually
@@ -174,9 +181,15 @@ def _honest_calibration(forecast: Any) -> tuple[float, dict[str, Any]]:
             "n_resolved_outcomes": resolved,
             "calibration_status": "uncalibrated",
         }
-        if isinstance(metrics.get("brier_score"), (int, float)):
-            uncalibrated["brier_score"] = metrics["brier_score"]
-        return 0.0, uncalibrated
+        brier_score = metrics.get("brier_score")
+        if (
+            isinstance(brier_score, (int, float))
+            and not isinstance(brier_score, bool)
+            and isfinite(brier_score)
+            and 0.0 <= brier_score <= 1.0
+        ):
+            uncalibrated["brier_score"] = brier_score
+        return None, uncalibrated
 
     return float(ece), {
         **{k: v for k, v in metrics.items() if not isinstance(v, dict)},
@@ -190,10 +203,10 @@ class FridayForecastResponse(BaseModel):
     prediction: PredictionPayload
     confidence: str
     status: str = "COMPLETED"
-    calibration_score: float
+    calibration_score: float | None
     calibration_metrics: dict[str, Any] = Field(default_factory=dict)
-    predictive_distribution: dict[str, float] = Field(default_factory=dict)
-    intervals: list[dict[str, Any]] | dict[str, Any] = Field(default_factory=list)
+    predictive_distribution: dict[str, float] | None = None
+    intervals: list[dict[str, Any]] | dict[str, Any] | None = None
     model_metadata: dict[str, Any] = Field(default_factory=dict)
     prediction_is_not_authorization: bool = True
     executable_commands: list[str] = Field(default_factory=list)
@@ -326,42 +339,62 @@ class FridayResolutionRequest(BaseModel):
 def _friday_forecast_response(
     req: FridayForecastRequest, forecast: Any
 ) -> FridayForecastResponse:
-    """Build the delegation response for a forecast (fresh or replayed)."""
-    prob = forecast.probability or 0.5
-    prob_dist = forecast.predictive_distribution or {
-        "exceedance_probability": prob,
-        "p10": forecast.range_lower,
-        "p50": forecast.prediction,
-        "p90": forecast.range_upper,
-    }
-    drivers = [
-        DriverItem(
-            metric=d.name,
-            correlation=d.strength if d.direction == "increases_risk" else -d.strength,
-            lead_time="2h (lag-2 peak)" if d.leading_or_lagging == "leading" else "0h (concurrent)",
-        )
-        for d in forecast.drivers
-    ]
+    """Build an evidence-honest delegation response for fresh or replayed forecasts."""
+    scorable = (
+        forecast.status == ForecastStatus.ACTIVE
+        and forecast.confidence != ConfidenceLevel.INSUFFICIENT_DATA
+    )
+    probability = forecast.probability if scorable else None
+    drivers = (
+        [
+            DriverItem(
+                metric=d.name,
+                correlation=d.strength if d.direction == "increases_risk" else -d.strength,
+                lead_time="2h (lag-2 peak)" if d.leading_or_lagging == "leading" else "0h (concurrent)",
+            )
+            for d in forecast.drivers
+        ]
+        if scorable
+        else []
+    )
+    prob_dist: dict[str, float] | None = None
+    if scorable:
+        prob_dist = dict(forecast.predictive_distribution or {})
+        if not prob_dist:
+            prob_dist = {
+                "p10": forecast.range_lower,
+                "p50": forecast.prediction,
+                "p90": forecast.range_upper,
+            }
+        # A true 0.0 probability is meaningful and must not be replaced by a
+        # neutral 0.5 default. Omit the field when no probability was measured.
+        if probability is not None:
+            prob_dist["exceedance_probability"] = float(probability)
+
     cal_score, cal_metrics = _honest_calibration(forecast)
     return FridayForecastResponse(
         futuris_forecast_id=forecast.forecast_id,
         friday_request_id=req.friday_request_id,
         prediction=PredictionPayload(
-            point_estimate=forecast.prediction,
-            lower_bound=forecast.range_lower,
-            upper_bound=forecast.range_upper,
+            point_estimate=forecast.prediction if scorable else None,
+            lower_bound=forecast.range_lower if scorable else None,
+            upper_bound=forecast.range_upper if scorable else None,
             probability_distribution=prob_dist,
         ),
         confidence=forecast.confidence.value.upper(),
         status=forecast.status.value,
         calibration_score=cal_score,
         calibration_metrics=cal_metrics,
-        predictive_distribution=forecast.predictive_distribution or prob_dist,
-        intervals=forecast.intervals or {"90%": (forecast.range_lower, forecast.range_upper)},
+        predictive_distribution=prob_dist,
+        intervals=(
+            forecast.intervals or {"90%": (forecast.range_lower, forecast.range_upper)}
+            if scorable
+            else None
+        ),
         model_metadata=forecast.model_metadata or {"model_version": forecast.model_version},
         prediction_is_not_authorization=True,
         executable_commands=[],
-        assumptions=forecast.assumptions or ["Cached idempotent response"],
+        assumptions=list(forecast.assumptions),
         evidence_snapshot_id=str(forecast.evidence[0].evidence_id)
         if forecast.evidence
         else "no_evidence_frozen",
