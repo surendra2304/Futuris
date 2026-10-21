@@ -1,4 +1,14 @@
-import { Forecast, Outcome, CalibrationCurve, BacktestRun, EcosystemOverview, UniverseMatrixResponse, UniversePredictionResponse } from './types';
+import type {
+  Forecast,
+  Outcome,
+  CalibrationCurve,
+  BacktestRun,
+  EcosystemOverview,
+  UniverseMatrixResponse,
+  UniversePredictionResponse,
+  PortfolioRiskResponse,
+  FanChartResponse,
+} from './types';
 
 const API_BASE = '/v1';
 
@@ -163,4 +173,56 @@ export async function requestUniversePrediction(
     }),
   });
   return handleResponse<UniversePredictionResponse>(res, `Failed to request prediction for ${target}`);
+}
+
+export async function fetchPortfolioRisk(
+  windowDays = 30,
+  confidenceLevel = 0.95
+): Promise<PortfolioRiskResponse> {
+  const res = await fetch(
+    `${API_BASE}/risk/portfolio?window_days=${windowDays}&confidence_level=${confidenceLevel}`,
+    {
+      headers: getHeaders(),
+    }
+  );
+  return handleResponse<PortfolioRiskResponse>(res, 'Failed to fetch portfolio risk');
+}
+
+export async function fetchStratexPairs(): Promise<{
+  active_pairs: string[];
+  count: number;
+  source: string;
+}> {
+  const res = await fetch(`${API_BASE}/risk/stratex/pairs`, {
+    headers: getHeaders(),
+  });
+  return handleResponse<{
+    active_pairs: string[];
+    count: number;
+    source: string;
+  }>(res, 'Failed to fetch Stratex active pairs');
+}
+
+export async function fetchFanChartSimulation(
+  target: string,
+  baseValue = 100,
+  horizonSteps = 12,
+  volatility = 0.03,
+  numSamples = 1000
+): Promise<FanChartResponse> {
+  const res = await fetch(`${API_BASE}/scenarios/monte-carlo/fan-chart`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      target,
+      base_value: baseValue,
+      horizon_steps: horizonSteps,
+      volatility,
+      num_samples: numSamples,
+    }),
+  });
+  return handleResponse<FanChartResponse>(
+    res,
+    `Failed to generate fan chart simulation for ${target}`
+  );
 }

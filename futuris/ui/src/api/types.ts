@@ -161,3 +161,79 @@ export interface UniversePredictionResponse {
   expires_at: string;
   intelx_context_included: boolean;
 }
+
+export interface PositionItem {
+  symbol: string;
+  side: 'LONG' | 'SHORT' | string;
+  size: number;
+  entry_price: number;
+  current_price: number;
+  unrealized_pnl: number;
+  leverage: number;
+  liquidation_price: number;
+  margin: number;
+  updated_at: string;
+}
+
+export interface AssetRiskReport {
+  symbol: string;
+  sample_size: number;
+  basel_traffic_light: 'green' | 'yellow' | 'red';
+  var_95: number;
+  var_99: number;
+  cvar_95: number;
+  cvar_99: number;
+  kupiec_passed: boolean;
+  kupiec_p_value: number;
+  breach_count_95: number;
+  weight: number;
+}
+
+export interface PortfolioRiskSummary {
+  total_exposure_usd: number;
+  total_margin_usd: number;
+  total_unrealized_pnl: number;
+  portfolio_var_95: number;
+  portfolio_cvar_95: number;
+  highest_risk_asset: string;
+  overall_traffic_light: 'green' | 'yellow' | 'red';
+  confidence_level: number;
+  lookback_window_days: number;
+}
+
+export interface PortfolioRiskResponse {
+  active_pairs: string[];
+  positions: PositionItem[];
+  assets: AssetRiskReport[];
+  portfolio_summary: PortfolioRiskSummary;
+  prediction_is_not_authorization: boolean;
+  timestamp: string;
+}
+
+export interface FanChartSlicePayload {
+  step: number;
+  mean: number;
+  std: number;
+  p05: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  p99: number;
+  exceedance_probability?: number | null;
+}
+
+export interface FanChartResponse {
+  target: string;
+  base_value: number;
+  num_samples: number;
+  horizon_steps: number;
+  fan_chart: FanChartSlicePayload[];
+  trajectories_sample: number[][];
+  driver_names: string[];
+  sample_correlations: Record<string, Record<string, number>>;
+  prediction_is_not_authorization: boolean;
+  timestamp: string;
+}
