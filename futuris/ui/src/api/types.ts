@@ -106,22 +106,25 @@ export interface EcosystemOverview {
   timestamp: string;
 }
 
-export type RiskLevel = 'NOMINAL' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
+export type RiskLevel = 'UNKNOWN' | 'NOMINAL' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
 
 export interface TargetPostureItem {
   target: string;
   name: string;
   domain: string;
-  point_prediction: number;
+  point_prediction: number | null;
   unit: string;
-  range_lower: number;
-  range_upper: number;
+  range_lower: number | null;
+  range_upper: number | null;
   probability: number | null;
   confidence: string;
   risk_level: RiskLevel;
   mitigation_action: string;
   interpretation: string;
-  last_updated: string;
+  last_updated: string | null;
+  status?: string;
+  evidence_class?: string | null;
+  evidence_source?: string | null;
 }
 
 export interface DomainPostureSummary {
@@ -129,14 +132,19 @@ export interface DomainPostureSummary {
   display_name: string;
   risk_level: RiskLevel;
   target_count: number;
+  scored_target_count: number;
+  unknown_target_count: number;
   targets: TargetPostureItem[];
 }
 
 export interface UniverseMatrixResponse {
-  ecosystem_health_score: number;
+  ecosystem_health_score: number | null;
   overall_posture: RiskLevel;
   total_domains: number;
   total_active_targets: number;
+  scored_target_count: number;
+  unknown_target_count: number;
+  coverage_pct: number | null;
   domains: DomainPostureSummary[];
   timestamp: string;
 }
@@ -146,10 +154,10 @@ export interface UniversePredictionResponse {
   target: string;
   target_name: string;
   domain: string;
-  point_prediction: number;
+  point_prediction: number | null;
   unit: string;
-  range_lower: number;
-  range_upper: number;
+  range_lower: number | null;
+  range_upper: number | null;
   probability: number | null;
   confidence: string;
   risk_level: RiskLevel;
