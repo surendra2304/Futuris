@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from futuris.api.deps import get_db_session, get_event_repo, get_outcome_repo
 from futuris.core.enums import (
     ConfidenceLevel,
-    ConfidenceLevel,
     EvidenceClass,
     ForecastEventType,
     ForecastStatus,
