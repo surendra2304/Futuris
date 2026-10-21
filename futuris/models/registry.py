@@ -11,6 +11,10 @@ from futuris.models.adapters import (
     SeasonalNaiveAdapter,
 )
 from futuris.models.base import ModelAdapter
+from futuris.models.diffusion_forecaster import (
+    BassDiffusionModelAdapter,
+    HawkesProcessCascadeAdapter,
+)
 
 
 class ModelRegistry:
@@ -24,6 +28,8 @@ class ModelRegistry:
             "auto_ets": AutoETSAdapter,
             "auto_arima": AutoARIMAAdapter,
             "mean_ensemble": MeanEnsembleAdapter,
+            "bass_diffusion": BassDiffusionModelAdapter,
+            "hawkes_cascade": HawkesProcessCascadeAdapter,
         }
 
     def get_adapter(

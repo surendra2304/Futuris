@@ -50,8 +50,13 @@ logger = get_logger("futuris.ecosystem.adapters")
 class EcosystemAdapter:
     """Gateway adapter interacting with FRIDAY Universe external microservices."""
 
-    def __init__(self, timeout_seconds: float = 6.0) -> None:
+    def __init__(
+        self,
+        timeout_seconds: float = 6.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.timeout = timeout_seconds
+        self.transport = transport
 
     async def enhance_forecast_with_inference(
         self,
@@ -212,6 +217,17 @@ class EcosystemAdapter:
         )
         return True
 
+    async def fetch_vyralx_trend_context(self, topic: str) -> dict[str, Any] | None:
+        """Fetch viral trend context, diffusion velocity and saturation from VyralX."""
+        from futuris.connectors.vyralx import VyralXConnector
+
+        connector = VyralXConnector(transport=self.transport)
+        try:
+            return await connector.fetch_viral_cascades(topic)
+        except Exception as exc:
+            logger.warning("vyralx_trend_context_failed", topic=topic, error=str(exc))
+            return None
+
     async def probe_peers(self) -> list[dict[str, Any]]:
         """Probe live status, latency, and connectivity of all FRIDAY Universe peer agents."""
         peers_to_check = [
@@ -278,6 +294,14 @@ class EcosystemAdapter:
                 "probe_url": f"{getattr(settings, 'FRIDAY_URL', 'http://friday:10000').rstrip('/')}/health",
                 "headers": {},
                 "capabilities": ["Master Delegation", "Voice Control", "Cross-Agent Routing"],
+            },
+            {
+                "name": "VyralX",
+                "role": "Social Trend Diffusion & Viral Cascade Engine",
+                "url": getattr(settings, "VYRALX_URL", "http://vyralx:8000"),
+                "probe_url": f"{getattr(settings, 'VYRALX_URL', 'http://vyralx:8000').rstrip('/')}/health",
+                "headers": {"Authorization": f"Bearer {getattr(settings, 'VYRALX_API_KEY', '')}"},
+                "capabilities": ["Social Virality", "Diffusion Velocity", "Trend Forecasting"],
             },
         ]
 
@@ -348,7 +372,7 @@ class EcosystemAdapter:
                 "circuit": breaker.snapshot(),
             }
 
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx.AsyncClient(timeout=2.0, transport=self.transport) as client:
             tasks = [_check_peer(client, p) for p in peers_to_check]
             results = await asyncio.gather(*tasks)
             return list(results)

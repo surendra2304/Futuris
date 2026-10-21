@@ -19,6 +19,10 @@ def build_scheduler_connector() -> BaseConnector:
         from futuris.connectors.nexus import NexusConnector
 
         return NexusConnector(base_url=settings.NEXUS_URL, api_key=settings.NEXUS_API_KEY)
+    if settings.FUTURIS_TELEMETRY_SOURCE == "vyralx":
+        from futuris.connectors.vyralx import VyralXConnector
+
+        return VyralXConnector(base_url=settings.VYRALX_URL, api_key=settings.VYRALX_API_KEY)
     from futuris.connectors.synthetic_telemetry import SyntheticTelemetryConnector
 
     return SyntheticTelemetryConnector(seed=42)

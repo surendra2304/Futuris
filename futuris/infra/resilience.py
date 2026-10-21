@@ -187,6 +187,10 @@ class CircuitBreakerRegistry:
             self._breakers[name] = breaker
         return self._breakers[name]
 
+    def get(self, name: str) -> CircuitBreaker:
+        """Alias for for_peer(name)."""
+        return self.for_peer(name)
+
     def peers(self) -> list[str]:
         return sorted(self._breakers)
 
