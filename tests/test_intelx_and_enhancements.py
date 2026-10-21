@@ -126,7 +126,136 @@ def test_ai_universe_model_enhancement_and_narrative():
     assert "service:checkout:capacity_exceedance_24h" in narrative
     assert "3850.00" in narrative
     assert "Primary driver:" in narrative
-    assert "Historical accuracy for this target type: 88%" in narrative
+    assert "Historical accuracy: 88.0% (caller-supplied measured value)" in narrative
+
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [float("nan"), float("inf"), -0.1, 100.1, True],
+)
+def test_narrative_rejects_invalid_historical_accuracy(invalid: float) -> None:
+    forecast = _sample_forecast_for_narrative()
+    with pytest.raises(ValueError, match="finite percentage"):
+        ForecastExplanationGenerator.generate_narrative_explanation(
+            forecast, historical_accuracy_pct=invalid
+        )
+
+
+def _sample_forecast_for_narrative(**overrides: object) -> Forecast:
+    now = datetime.now(UTC)
+    values: dict[str, object] = {
+        "forecast_id": uuid4(),
+        "target": "service:checkout:capacity_exceedance_24h",
+        "as_of": now,
+        "horizon": timedelta(hours=24),
+        "expires_at": now + timedelta(hours=24),
+        "prediction": 3850.0,
+        "range_lower": 3400.0,
+        "range_upper": 4300.0,
+        "probability": None,
+        "confidence": ConfidenceLevel.HIGH,
+        "drivers": [],
+        "evidence": [],
+        "assumptions": [],
+        "review_at": now + timedelta(hours=6),
+        "status": ForecastStatus.ACTIVE,
+        "model_version": "auto_arima@v1",
+    }
+    values.update(overrides)
+    return Forecast(**values)
+
+
+def test_default_narrative_does_not_invent_metrics_or_explanations() -> None:
+    narrative = ForecastExplanationGenerator.generate_narrative_explanation(
+        _sample_forecast_for_narrative(probability=0.0)
+    )
+    assert "event probability 0.0%" in narrative
+    assert "not identified from the available forecast evidence" in narrative
+    assert "Historical accuracy: not measured for this target" in narrative
+    assert "Calibration metrics: not measured from resolved outcomes" in narrative
+    assert "87%" not in narrative
+    assert "15%" not in narrative
+    assert "0.82" not in narrative
+    assert "positive momentum" not in narrative
+    assert "correlation" not in narrative
+    assert "not authorization to act" in narrative
+
+
+
+def test_ai_universe_enhancer_applies_configured_confidence_scaling() -> None:
+    enhancer = AIUniverseModelEnhancer(confidence_scaling=1.25)
+    result = enhancer.enhance_forecast(
+        base_prediction=50.0,
+        range_lower=40.0,
+        range_upper=60.0,
+    )
+    assert result.adjusted_lower_bound == 37.5
+    assert result.adjusted_upper_bound == 62.5
+    assert result.confidence_interval_expansion_pct == 25.0
+    assert "No additional exogenous risk modifier was reported" in result.risk_factors
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"confidence_scaling": 0.9},
+        {"confidence_scaling": float("nan")},
+        {"confidence_scaling": float("inf")},
+        {"confidence_scaling": True},
+    ],
+)
+def test_ai_universe_rejects_invalid_confidence_scaling(kwargs: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="confidence_scaling"):
+        AIUniverseModelEnhancer(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "factors",
+    [
+        {"volatility_multiplier": 0.0},
+        {"volatility_multiplier": float("nan")},
+        {"sentiment_multiplier": float("inf")},
+        {"sentiment_multiplier": -1.0},
+        {"volatility_multiplier": "not-numeric"},
+    ],
+)
+def test_ai_universe_rejects_invalid_context_multipliers(factors: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="multiplier"):
+        AIUniverseModelEnhancer().enhance_forecast(10.0, 8.0, 12.0, factors)
+
+
+def test_ai_universe_does_not_infer_regulatory_risks_from_sentiment() -> None:
+    result = AIUniverseModelEnhancer().enhance_forecast(
+        base_prediction=10.0,
+        range_lower=8.0,
+        range_upper=12.0,
+        context_factors={"sentiment_multiplier": 0.9},
+    )
+    assert any("specific cause not inferred" in risk for risk in result.risk_factors)
+    assert all("regulatory developments" not in risk for risk in result.risk_factors)
+
+
+
+def test_ai_universe_preserves_asymmetric_interval_when_scaling() -> None:
+    result = AIUniverseModelEnhancer(confidence_scaling=1.2).enhance_forecast(
+        base_prediction=100.0,
+        range_lower=70.0,
+        range_upper=110.0,
+    )
+    assert result.adjusted_lower_bound == 64.0
+    assert result.adjusted_upper_bound == 112.0
+
+
+def test_zero_width_interval_reports_zero_measured_expansion() -> None:
+    result = AIUniverseModelEnhancer().enhance_forecast(
+        base_prediction=10.0,
+        range_lower=10.0,
+        range_upper=10.0,
+    )
+    assert result.adjusted_lower_bound == 10.0
+    assert result.adjusted_upper_bound == 10.0
+    assert result.confidence_interval_expansion_pct == 0.0
 
 
 def test_prometheus_metrics_scrape_endpoint():

@@ -1,6 +1,7 @@
 """AI-Universe enhanced forecasting models and human-readable explanation generation."""
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any
 
 from futuris.core.schemas import Forecast
@@ -16,10 +17,17 @@ class EnhancedForecastContext:
 
 
 class AIUniverseModelEnhancer:
-    """Combines statistical baseline forecasting with AI-Universe qualitative nuance."""
+    """Adjust intervals using explicit exogenous multipliers without inventing risks."""
 
     def __init__(self, confidence_scaling: float = 1.15) -> None:
-        self.confidence_scaling = confidence_scaling
+        if (
+            isinstance(confidence_scaling, bool)
+            or not isinstance(confidence_scaling, (int, float))
+            or not isfinite(confidence_scaling)
+            or confidence_scaling < 1.0
+        ):
+            raise ValueError("confidence_scaling must be a finite multiplier >= 1.0")
+        self.confidence_scaling = float(confidence_scaling)
 
     def enhance_forecast(
         self,
@@ -28,34 +36,70 @@ class AIUniverseModelEnhancer:
         range_upper: float,
         context_factors: dict[str, Any] | None = None,
     ) -> EnhancedForecastContext:
-        """Adjust statistical forecast intervals with qualitative research nuance."""
+        """Widen the input interval using configured and observed exogenous factors.
+
+        The point prediction is never changed. Context factors must be positive
+        finite multipliers. Their magnitudes are reported; no underlying cause is
+claimed unless that cause is present in the source data.
+        """
+        values = (base_prediction, range_lower, range_upper)
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+            for value in values
+        ):
+            raise ValueError("forecast estimate and bounds must be finite numbers")
+        base_prediction, range_lower, range_upper = (float(value) for value in values)
+        if not range_lower <= base_prediction <= range_upper:
+            raise ValueError(
+                "forecast bounds must satisfy range_lower <= prediction <= range_upper"
+            )
+
         ctx = context_factors or {}
-        vol_factor = float(ctx.get("volatility_multiplier", 1.0))
-        sentiment = float(ctx.get("sentiment_multiplier", 1.0))
+        try:
+            vol_factor = float(ctx.get("volatility_multiplier", 1.0))
+            sentiment = float(ctx.get("sentiment_multiplier", 1.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("context multipliers must be numeric") from exc
+        if not isfinite(vol_factor) or vol_factor <= 0.0:
+            raise ValueError("volatility_multiplier must be finite and greater than zero")
+        if not isfinite(sentiment) or sentiment <= 0.0:
+            raise ValueError("sentiment_multiplier must be finite and greater than zero")
 
-        # Statistical forecast is strictly the core point estimate
-        # AI-Universe context modulates uncertainty boundaries
-        half_width = (range_upper - range_lower) / 2.0
-        scaled_half_width = half_width * max(1.0, vol_factor)
-
-        adj_lower = base_prediction - scaled_half_width
-        adj_upper = base_prediction + scaled_half_width
-
-        expansion_pct = max(0.0, ((scaled_half_width - half_width) / (half_width + 1e-8)) * 100.0)
-
-        risk_list = []
-        if vol_factor > 1.2:
-            risk_list.append("Elevated market volatility indicated by external research")
-        if sentiment < 0.95:
-            risk_list.append("Adverse sector regulatory developments observed in IntelX reports")
-        if not risk_list:
-            risk_list.append("Nominal operational baseline; low exogenous variance")
-
-        nuance_text = (
-            f"Statistical baseline preserved around {base_prediction:.2f}. "
-            f"Confidence intervals adjusted by +{expansion_pct:.1f}% for qualitative risk."
+        lower_width = base_prediction - range_lower
+        upper_width = range_upper - base_prediction
+        total_multiplier = self.confidence_scaling * max(1.0, vol_factor)
+        adj_lower = base_prediction - lower_width * total_multiplier
+        adj_upper = base_prediction + upper_width * total_multiplier
+        original_width = lower_width + upper_width
+        expansion_pct = (
+            (total_multiplier - 1.0) * 100.0 if original_width > 0.0 else 0.0
         )
 
+        risk_list: list[str] = []
+        if vol_factor > 1.0:
+            risk_list.append(
+                f"Volatility multiplier increased uncertainty width by factor "
+                f"{vol_factor:.2f}"
+            )
+        if sentiment < 1.0:
+            risk_list.append(
+                f"Adverse sentiment multiplier was supplied ({sentiment:.2f}); "
+                "specific cause not inferred"
+            )
+        elif sentiment > 1.0:
+            risk_list.append(
+                f"Favourable sentiment multiplier was supplied ({sentiment:.2f}); "
+                "outcome certainty is not implied"
+            )
+        if not risk_list:
+            risk_list.append("No additional exogenous risk modifier was reported")
+
+        nuance_text = (
+            f"Statistical point estimate preserved at {base_prediction:.2f}. "
+            f"Uncertainty half-width scaled by factor {total_multiplier:.2f}."
+        )
         return EnhancedForecastContext(
             adjusted_lower_bound=round(adj_lower, 2),
             adjusted_upper_bound=round(adj_upper, 2),
@@ -64,37 +108,71 @@ class AIUniverseModelEnhancer:
             confidence_interval_expansion_pct=round(expansion_pct, 1),
         )
 
-
 class ForecastExplanationGenerator:
-    """Generates human-readable, decision-grade explanations for any generated forecast."""
+    """Human-readable explanations with explicit boundaries for missing evidence."""
 
     @staticmethod
     def generate_narrative_explanation(
         forecast: Forecast,
-        historical_accuracy_pct: float = 87.0,
+        historical_accuracy_pct: float | None = None,
     ) -> str:
-        """Format forecast into rich human-readable narrative explanation."""
-        primary_driver = "consistent positive momentum over last 14 days"
-        corr_val = 0.82
-        if forecast.drivers:
-            top_d = forecast.drivers[0]
-            dir_str = (
-                top_d.direction.value if hasattr(top_d.direction, "value") else str(top_d.direction)
-            )
-            primary_driver = f"{top_d.name} ({dir_str})"
-            corr_val = top_d.strength
+        """Explain a forecast without inventing drivers, risks, or quality metrics.
 
-        prob_str = (
-            f", exceedance probability {(forecast.probability or 0.0) * 100:.1f}%"
-            if forecast.probability
+        Historical accuracy is optional because the Forecast object does not
+        itself prove historical accuracy. Callers may provide it only when it
+        has been computed from resolved outcomes for the relevant target.
+        """
+        if historical_accuracy_pct is not None and (
+            isinstance(historical_accuracy_pct, bool)
+            or not isinstance(historical_accuracy_pct, (int, float))
+            or not isfinite(historical_accuracy_pct)
+            or not 0.0 <= historical_accuracy_pct <= 100.0
+        ):
+            raise ValueError(
+                "historical_accuracy_pct must be a finite percentage in [0, 100]"
+            )
+
+        driver_text = "not identified from the available forecast evidence"
+        if forecast.drivers:
+            top_driver = forecast.drivers[0]
+            direction = (
+                top_driver.direction.value
+                if hasattr(top_driver.direction, 'value')
+                else str(top_driver.direction)
+            )
+            driver_text = f"{top_driver.name} ({direction})"
+            if isfinite(float(top_driver.strength)):
+                # Strength is a relative influence weight, not a measured correlation.
+                driver_text += f", reported strength {float(top_driver.strength):.2f}"
+
+        probability_text = (
+            f", event probability {forecast.probability * 100:.1f}%"
+            if forecast.probability is not None
             else ""
+        )
+        calibration_text = (
+            "available in forecast metadata"
+            if forecast.calibration_metrics
+            else "not measured from resolved outcomes"
+        )
+        accuracy_text = (
+            f"{historical_accuracy_pct:.1f}% (caller-supplied measured value)"
+            if historical_accuracy_pct is not None
+            else "not measured for this target"
+        )
+        assumptions_text = (
+            "; ".join(forecast.assumptions) if forecast.assumptions else "not recorded"
         )
 
         return (
-            f"{forecast.target} predicted at {forecast.prediction:.2f} "
-            f"(80% CI: {forecast.range_lower:.2f} - {forecast.range_upper:.2f}{prob_str}). "
-            f"Primary driver: {primary_driver} (correlation {corr_val:.2f}). "
-            f"Risk factors: volatility regime transition probability 15%. "
-            f"Model: {forecast.model_version} with calibration adjustment. "
-            f"Historical accuracy for this target type: {historical_accuracy_pct:.0f}%."
+            f"{forecast.target} forecast at {forecast.prediction:.2f} "
+            f"(reported prediction interval: {forecast.range_lower:.2f} to "
+            f"{forecast.range_upper:.2f}{probability_text}). "
+            f"Identified driver: {driver_text}. "
+            f"Model: {forecast.model_version}. "
+            f"Meta-confidence: {forecast.confidence.value}. "
+            f"Calibration metrics: {calibration_text}. "
+            f"Historical accuracy: {accuracy_text}. "
+            f"Recorded assumptions: {assumptions_text}. "
+            "Forecasts are advisory and are not authorization to act."
         )
