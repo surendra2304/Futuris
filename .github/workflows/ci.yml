@@ -10,6 +10,7 @@ jobs:
   test:
     name: Build, Lint, Test & Docker Hardening Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -33,7 +34,7 @@ jobs:
 
       - name: Run pytest test suite
         run: |
-          pytest --cov=futuris --cov-report=term-missing
+          pytest --strict-markers --cov=futuris --cov-report=term-missing --cov-fail-under=80
 
       - name: Verify Docker build
         run: |

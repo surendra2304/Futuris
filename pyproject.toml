@@ -59,6 +59,7 @@ ignore = ["B008"]  # FastAPI dependency defaults are function calls by design
 minversion = "8.0"
 addopts = "-ra -q"
 asyncio_mode = "auto"
+xfail_strict = true
 testpaths = ["tests"]
 pythonpath = ["."]
 

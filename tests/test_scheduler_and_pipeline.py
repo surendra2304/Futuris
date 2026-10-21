@@ -1,6 +1,7 @@
 """Tests for modular ForecastingPipeline stages, scheduler noise suppression, and jobs."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -140,6 +141,8 @@ async def test_scheduler_jobs_direct_trigger():
     scheduler = ForecastScheduler()
     # Scope to single target for fast direct-trigger test execution
     scheduler.subscriptions = scheduler.subscriptions[:1]
+    # Keep this direct-trigger test scoped: dynamic pair discovery is tested separately.
+    scheduler.sync_dynamic_trading_subscriptions = AsyncMock(return_value=[])
 
     # 1. Trigger Ingestion Job
     points = await scheduler.ingest_job()
