@@ -1,29 +1,26 @@
 {
   "task": 2,
   "repository": "Futuris",
-  "branch": "automation/friday-universe-task-2",
-  "finished_at": "2026-10-21T01:03:03Z",
-  "active_coding_seconds": 4,
-  "passes": 1,
-  "status": "failed",
-  "failures": [
-    "Pass 1 failed with exit 1. See log pass-1.log."
+  "durable_branch": "automation/friday-universe-task-2",
+  "implementation_branch": "fix/task-2-regressions-2026-10-22",
+  "focused_commit_sha": "2f4ad80e676fee56bf51857c32853cb79cd61ee6",
+  "pr_branch_commit_sha": "f579b4f5bcd7ed6b9de7e27bceebbf335331778b",
+  "changed_files": [
+    "futuris/evaluation/backtest.py",
+    "tests/test_backtest_leakage_regressions.py"
   ],
-  "source_paths_vs_main": [
-    "futuris/api/routers/friday.py",
-    "futuris/core/pipeline.py",
-    "futuris/core/schemas.py",
-    "futuris/evaluation/calibration.py",
-    "futuris/storage/repositories.py",
-    "github/friday-continuation/task-2-checkpoint.md",
-    "tests/core/test_provenance.py",
-    "tests/evaluation/test_evaluation.py",
-    "tests/storage/test_repositories.py",
-    "tests/test_friday_delegation.py",
-    "tests/test_prompt7_futuris.py"
-  ],
-  "checkpoint_path": ".github/friday-continuation/task-2-checkpoint.md",
-  "next_run_prompt_path": ".github/friday-continuation/task-2-next-run.md",
-  "checkpoint_updated": true,
-  "next_run_updated": true
+  "pull_request": {
+    "number": 6,
+    "url": "https://github.com/surendra2304/Futuris/pull/6",
+    "status": "updated"
+  },
+  "tests": {
+    "status": "not_run",
+    "command": "pytest -q tests/test_backtest_leakage_regressions.py tests/test_prompt7_futuris.py::test_backtest_leakage_detection",
+    "reason": "Laptop test connector returned HTTP 404; inspect PR CI on the updated head."
+  },
+  "active_engineering_minutes": null,
+  "target_minutes": 30,
+  "target_met": false,
+  "next_action": "Inspect CI for f579b4f5bcd7ed6b9de7e27bceebbf335331778b and run focused tests."
 }
