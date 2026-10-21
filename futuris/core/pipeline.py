@@ -26,6 +26,7 @@ from futuris.features.normalize import Normalizer, TrustedSignalSet
 from futuris.infra.cpu import cpu_saturated, run_cpu
 from futuris.infra.logging import get_logger
 from futuris.models.base import ModelPrediction
+from futuris.models.isolated_execution import fit_and_predict_isolated
 from futuris.models.registry import model_registry
 from futuris.models.routing import ModelRouter, SeriesMetadata
 from futuris.models.selection import select_best_adapter
@@ -191,31 +192,54 @@ class ModelingStage:
         x_train = x_df.iloc[:-val_steps]
         y_val = y_series.iloc[-val_steps:].to_numpy()
 
-        selection = select_best_adapter(
-            candidates,
-            x_train=x_train,
-            y_train=y_train,
-            y_val=y_val,
-            as_of=inp.as_of,
-            val_steps=val_steps,
-            step_minutes=step_minutes,
-            budget_seconds=inp.model_budget_seconds,
-            cpu_saturated=cpu_saturated,
-        )
-        best_adapter = selection.adapter
-        best_score = selection.score
-        is_fallback = selection.is_fallback
-
-        best_adapter.fit(x_df, y_series, as_of=inp.as_of)
-        final_prediction = best_adapter.predict(
-            horizon=horizon_steps,
-            capacity_threshold=inp.capacity_threshold,
-            probability_method="empirical",
-        )
-
-        model_version_str = model_registry.get_version_string(best_adapter)
-        if is_fallback:
-            model_version_str = f"{model_version_str}:fallback_after_candidate_failures"
+        # StatsForecast's native ETS optimizer can hold the server process's
+        # GIL. Isolate candidate fits and final prediction; pressure-shed requests
+        # retain the cheaper baseline-only path instead of queueing another fit.
+        if cpu_saturated:
+            selection = select_best_adapter(
+                candidates,
+                x_train=x_train,
+                y_train=y_train,
+                y_val=y_val,
+                as_of=inp.as_of,
+                val_steps=val_steps,
+                step_minutes=step_minutes,
+                budget_seconds=inp.model_budget_seconds,
+                cpu_saturated=True,
+            )
+            best_adapter = selection.adapter
+            best_score = selection.score
+            best_adapter.fit(x_df, y_series, as_of=inp.as_of)
+            final_prediction = best_adapter.predict(
+                horizon=horizon_steps,
+                capacity_threshold=inp.capacity_threshold,
+                probability_method="empirical",
+            )
+            model_version_str = model_registry.get_version_string(best_adapter)
+            if selection.is_fallback:
+                model_version_str = (
+                    f"{model_version_str}:fallback_after_candidate_failures"
+                )
+            selection_metadata = selection.metadata()
+        else:
+            isolated = fit_and_predict_isolated(
+                candidates=candidates,
+                x_train=x_train,
+                y_train=y_train,
+                y_val=y_val,
+                x_full=x_df,
+                y_full=y_series,
+                as_of=inp.as_of,
+                val_steps=val_steps,
+                step_minutes=step_minutes,
+                horizon_steps=horizon_steps,
+                capacity_threshold=inp.capacity_threshold,
+                budget_seconds=inp.model_budget_seconds,
+            )
+            final_prediction = isolated.prediction
+            best_score = isolated.best_score
+            model_version_str = isolated.model_version
+            selection_metadata = isolated.selection_metadata
 
         return ModelingOutput(
             prediction=final_prediction,
@@ -227,7 +251,7 @@ class ModelingStage:
             horizon=inp.horizon,
             as_of=inp.as_of,
             target=inp.target,
-            selection_metadata=selection.metadata(),
+            selection_metadata=selection_metadata,
         )
 
 

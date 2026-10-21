@@ -19,6 +19,7 @@ from futuris.infra.cpu import cpu_saturated, run_cpu
 from futuris.infra.logging import get_logger
 from futuris.models.ai_universe_enhanced import AIUniverseModelEnhancer
 from futuris.models.base import ModelPrediction
+from futuris.models.isolated_execution import fit_and_predict_isolated
 from futuris.models.registry import model_registry
 from futuris.models.routing import ModelRouter, SeriesMetadata
 from futuris.models.selection import select_best_adapter
@@ -163,32 +164,55 @@ class ForecastEngine:
         x_train = x_df.iloc[:-val_steps]
         y_val = y_series.iloc[-val_steps:].to_numpy()
 
-        selection = select_best_adapter(
-            candidates,
-            x_train=x_train,
-            y_train=y_train,
-            y_val=y_val,
-            as_of=as_of,
-            val_steps=val_steps,
-            step_minutes=step_minutes,
-            budget_seconds=model_budget_seconds,
-            cpu_saturated=cpu_saturated,
-        )
-        best_adapter = selection.adapter
-        best_score = selection.score
-        is_fallback = selection.is_fallback
-
-        # 7. Refit best adapter on complete historical dataset
-        best_adapter.fit(x_df, y_series, as_of=as_of)
-        final_prediction: ModelPrediction = best_adapter.predict(
-            horizon=horizon_steps,
-            capacity_threshold=capacity_threshold,
-            probability_method="empirical",
-        )
-
-        model_version_str = model_registry.get_version_string(best_adapter)
-        if is_fallback:
-            model_version_str = f"{model_version_str}:fallback_after_candidate_failures"
+        # Keep native-model fitting out of the server process: StatsForecast's
+        # ETS optimizer can hold the GIL even when called from a worker thread.
+        # Under pressure, use only cheap baselines in the existing bounded CPU
+        # worker; otherwise the isolated worker owns selection, refit and predict.
+        if cpu_saturated:
+            selection = select_best_adapter(
+                candidates,
+                x_train=x_train,
+                y_train=y_train,
+                y_val=y_val,
+                as_of=as_of,
+                val_steps=val_steps,
+                step_minutes=step_minutes,
+                budget_seconds=model_budget_seconds,
+                cpu_saturated=True,
+            )
+            best_adapter = selection.adapter
+            best_score = selection.score
+            best_adapter.fit(x_df, y_series, as_of=as_of)
+            final_prediction: ModelPrediction = best_adapter.predict(
+                horizon=horizon_steps,
+                capacity_threshold=capacity_threshold,
+                probability_method="empirical",
+            )
+            model_version_str = model_registry.get_version_string(best_adapter)
+            if selection.is_fallback:
+                model_version_str = (
+                    f"{model_version_str}:fallback_after_candidate_failures"
+                )
+            selection_metadata = selection.metadata()
+        else:
+            isolated = fit_and_predict_isolated(
+                candidates=candidates,
+                x_train=x_train,
+                y_train=y_train,
+                y_val=y_val,
+                x_full=x_df,
+                y_full=y_series,
+                as_of=as_of,
+                val_steps=val_steps,
+                step_minutes=step_minutes,
+                horizon_steps=horizon_steps,
+                capacity_threshold=capacity_threshold,
+                budget_seconds=model_budget_seconds,
+            )
+            final_prediction = isolated.prediction
+            best_score = isolated.best_score
+            model_version_str = isolated.model_version
+            selection_metadata = isolated.selection_metadata
 
         # 7.1 Enhance uncertainty intervals with IntelX qualitative research
         enhanced_ctx = self.enhancer.enhance_forecast(
@@ -276,7 +300,7 @@ class ForecastEngine:
                 "model_version": model_version_str,
                 "family": model_version_str.split(":")[0],
                 "prediction_is_not_authorization": True,
-                **selection.metadata(),
+                **selection_metadata,
             },
         )
 

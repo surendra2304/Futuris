@@ -114,14 +114,6 @@ def _metadata(body: dict) -> dict:
 # ── 1. the loop keeps serving while a forecast computes ────────────────────
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "B24 (open, high): statsforecast's compiled ETS optimiser holds the GIL during a fit, "
-        "so the event loop stalls for 4-7 s on a 2-vCPU host (threshold 3 s). The fit already "
-        "runs in a worker thread; see REPO_ANALYSIS.md section 18 for the fix options."
-    ),
-)
 @pytest.mark.asyncio
 async def test_event_loop_stays_alive_while_a_forecast_computes(pressure_env: PressureEnv):
     stalls: list[float] = []
@@ -227,7 +219,11 @@ async def test_burst_of_forecasts_degrades_honestly(pressure_env: PressureEnv):
         assert "selection_elapsed_seconds" in meta
         if meta.get("selection_degraded"):
             assert meta.get("candidates_skipped"), "degraded selection must name what was skipped"
-            assert meta.get("degraded_reason") in {"cpu_pressure", "model_budget_exhausted"}
+            assert meta.get("degraded_reason") in {
+                "cpu_pressure",
+                "model_budget_exhausted",
+                "model_worker_unavailable",
+            }
 
     full_search = [body for body in bodies if not _metadata(body).get("selection_degraded")]
     # Admission control: a burst may not start more full searches than the CPU
