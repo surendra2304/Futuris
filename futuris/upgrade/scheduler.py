@@ -58,7 +58,7 @@ class DistributedLeaseTable:
         now = datetime.now(UTC)
         async with self._lock:
             current = self._leases.get(job_id)
-            if current and current.expires_at > now and current.owner != owner:
+            if current and current.expires_at > now:
                 return False
             self._leases[job_id] = JobLease(
                 job_id=job_id,

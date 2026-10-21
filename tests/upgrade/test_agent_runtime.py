@@ -41,7 +41,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.error, "ValueError: provider rejected request")
 
     async def test_max_iterations_must_be_positive_integer(self):
-        for value in (0, -1, True):
+        for value in (0, -1, True, 1.5):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 AgentRuntime(max_iterations=value)
 

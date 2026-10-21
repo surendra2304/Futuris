@@ -8,6 +8,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def test_single_flight(self):
         leases = DistributedLeaseTable()
         self.assertTrue(await leases.acquire("j1", "a"))
+        self.assertFalse(await leases.acquire("j1", "a"))
         self.assertFalse(await leases.acquire("j1", "b"))
         self.assertTrue(await leases.release("j1", "a"))
 
