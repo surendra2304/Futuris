@@ -238,7 +238,10 @@ async def request_universe_prediction(
             unit=spec.unit,
         )
         if scorable
-        else "No scored estimate is available; risk remains UNKNOWN until forecast evidence is available."
+        else (
+            "No scored estimate is available; risk remains UNKNOWN until "
+            "forecast evidence is available."
+        )
     )
 
     intelx_included = any(d.name.startswith("intelx:") for d in fc.drivers)
