@@ -114,14 +114,6 @@ def _metadata(body: dict) -> dict:
 # ── 1. the loop keeps serving while a forecast computes ────────────────────
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "B24 (open, high): statsforecast's compiled ETS optimiser holds the GIL during a fit, "
-        "so the event loop stalls for 4-7 s on a 2-vCPU host (threshold 3 s). The fit already "
-        "runs in a worker thread; see REPO_ANALYSIS.md section 18 for the fix options."
-    ),
-)
 @pytest.mark.asyncio
 async def test_event_loop_stays_alive_while_a_forecast_computes(pressure_env: PressureEnv):
     stalls: list[float] = []

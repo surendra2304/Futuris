@@ -1,5 +1,6 @@
 """Tests for scheduled tracking targets and calibration sweep dispatching."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -35,6 +36,8 @@ async def test_scheduler_forecast_refresh_dispatches_friday_signal():
     scheduler.subscriptions = [
         ForecastSubscription(target="trading:BTCUSDT:price_variance_24h")
     ]
+    # Dynamic target discovery has its own contract; this test isolates one configured target.
+    scheduler.sync_dynamic_trading_subscriptions = AsyncMock(return_value=[])
 
     from datetime import UTC, datetime, timedelta
 
@@ -69,5 +72,7 @@ async def test_scheduler_forecast_refresh_dispatches_friday_signal():
     ) as mock_dispatch:
         mock_dispatch.return_value = True
         refreshed = await scheduler.forecast_refresh_job()
+        await asyncio.gather(*scheduler._in_flight_tasks)
         assert len(refreshed) == 1
         assert refreshed[0].prediction == 68500.0
+        mock_dispatch.assert_awaited_once()
