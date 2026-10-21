@@ -52,16 +52,28 @@ def warn_if_default_credential(
     default_key: str,
     logger: Any,
 ) -> None:
-    """Log a loud, once-per-process warning when a built-in default key is in use.
+    """Reject public built-in credentials in production and warn in development.
 
-    Several connectors historically fell back to a hardcoded default credential
-    (``nexus_default_token``, ``forge_default_secret_key``, ...). Those strings
-    are public -- they live in this repository -- so a peer that accepts them
-    is a backdoor, and a deployment that forgot to configure a key was silently
-    authenticating with a guessable value. The warning makes the hazard visible
-    in the logs at the moment the connector is constructed.
+    These fallback strings are committed to source control, so they are not
+    secrets. A remote peer accepting one would let unauthenticated deployments
+    impersonate this connector. Development remains backward-compatible, but
+    production fails closed before the connector can send an outbound request.
     """
-    if api_key == default_key and connector_name not in _warned_default_credentials:
+    if api_key != default_key:
+        return
+
+    # Import here to keep the shared connector protocol independent of settings
+    # during module initialization.
+    from futuris.infra.config import settings
+    from futuris.upgrade.safe_config import is_production_environment
+
+    if is_production_environment(settings.APP_ENV):
+        raise RuntimeError(
+            f"{connector_name} connector refuses its built-in default credential in "
+            "production; configure an explicit, unique secret before using this connector"
+        )
+
+    if connector_name not in _warned_default_credentials:
         _warned_default_credentials.add(connector_name)
         logger.warning(
             "connector_using_builtin_default_credential",
