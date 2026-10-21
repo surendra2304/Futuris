@@ -4,7 +4,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from math import isfinite
 from typing import Any
-from uuid import uuid4
 
 from .models import ForecastEnvelope
 
@@ -59,27 +58,48 @@ class ForecastQualityGate:
 
     @classmethod
     def validate_forecast(cls, forecast: Any) -> tuple[bool, list[str]]:
+        """Validate supported forecast schemas without manufacturing missing fields.
+
+        `ForecastEnvelope` is the native upgrade contract. The core domain
+        `Forecast` is also supported for the application pipeline; its
+        categorical confidence maps to the gate's numeric calibration scale.
+        Arbitrary or partially populated objects are rejected explicitly
+        instead of having zero-valued predictions, intervals, and confidence
+        synthesized around them.
+        """
         gate = cls()
-        if not isinstance(forecast, ForecastEnvelope):
-            conf_val = getattr(getattr(forecast, "confidence", None), "value", forecast)
-            conf_num = 0.85 if conf_val == "high" else (0.65 if conf_val == "medium" else 0.45)
-            env = ForecastEnvelope(
-                forecast_id=getattr(forecast, "forecast_id", uuid4()),
-                target=getattr(forecast, "target", ""),
-                prediction=getattr(forecast, "prediction", 0.0),
-                lower=getattr(forecast, "range_lower", 0.0),
-                upper=getattr(forecast, "range_upper", 0.0),
-                probability=getattr(forecast, "probability", None),
-                confidence=conf_num,
-                model_version=getattr(forecast, "model_version", "m1"),
-                evidence_ids=[
-                    str(getattr(e, "evidence_id", e)) for e in getattr(forecast, "evidence", [])
-                ],
-            )
-        else:
+        if isinstance(forecast, ForecastEnvelope):
             env = forecast
+        else:
+            # Import lazily to keep the upgrade package importable on its own
+            # and avoid a module-level dependency between the two domain layers.
+            from futuris.core.enums import ConfidenceLevel
+            from futuris.core.schemas import Forecast as CoreForecast
+
+            if not isinstance(forecast, CoreForecast):
+                return False, [
+                    "unsupported forecast type; expected ForecastEnvelope or core Forecast"
+                ]
+
+            confidence_map = {
+                ConfidenceLevel.HIGH: 0.85,
+                ConfidenceLevel.MEDIUM: 0.65,
+                ConfidenceLevel.LOW: 0.45,
+            }
+            env = ForecastEnvelope(
+                forecast_id=forecast.forecast_id,
+                target=forecast.target,
+                prediction=forecast.prediction,
+                lower=forecast.range_lower,
+                upper=forecast.range_upper,
+                probability=forecast.probability,
+                confidence=confidence_map[forecast.confidence],
+                model_version=forecast.model_version,
+                evidence_ids=[str(evidence.evidence_id) for evidence in forecast.evidence],
+            )
+
         rep = gate.evaluate(env)
-        return rep.passed, [i.message for i in rep.errors]
+        return rep.passed, [issue.message for issue in rep.errors]
 
 
 def coverage_score(required: Iterable[str], observed: Iterable[str]) -> float:
