@@ -103,9 +103,40 @@ class ForecastScheduler:
 
         return prob_diff < delta_prob_threshold and pred_diff < delta_pred_threshold
 
+    async def sync_dynamic_trading_subscriptions(self) -> list[str]:
+        """Query Stratex to discover any newly active trading pairs and auto-register subscriptions."""
+        from futuris.connectors.trading_bot import TradingBotConnector
+
+        discovered_targets: list[str] = []
+        try:
+            connector = TradingBotConnector()
+            pairs = await connector.discover_active_trade_pairs()
+            existing_targets = {sub.target for sub in self.subscriptions}
+
+            for pair in pairs:
+                target = f"trading:{pair}:price_variance_24h"
+                discovered_targets.append(target)
+                if target not in existing_targets:
+                    self.subscriptions.append(
+                        ForecastSubscription(
+                            target=target,
+                            horizon=timedelta(hours=24),
+                            refresh_interval_minutes=60,
+                            delta_prob_threshold=0.05,
+                            delta_pred_threshold=25.0,
+                            enabled=True,
+                        )
+                    )
+                    logger.info("dynamic_trading_subscription_registered", target=target, pair=pair)
+        except Exception as exc:
+            logger.debug("dynamic_trading_subscription_sync_failed", error=str(exc))
+
+        return discovered_targets
+
     async def ingest_job(self) -> int:
         """Scheduled ingestion job pulling fresh telemetry and persisting observations."""
         logger.info("ingest_job_started")
+        await self.sync_dynamic_trading_subscriptions()
         connector = build_scheduler_connector()
         now = datetime.now(UTC)
         obs = await connector.fetch(now - timedelta(days=1), now)
@@ -117,6 +148,7 @@ class ForecastScheduler:
     async def forecast_refresh_job(self) -> list[Forecast]:
         """Scheduled job orchestrating forecasts and emitting updates for meaningful movements."""
         logger.info("forecast_refresh_job_started")
+        await self.sync_dynamic_trading_subscriptions()
         refreshed: list[Forecast] = []
         now = datetime.now(UTC)
 

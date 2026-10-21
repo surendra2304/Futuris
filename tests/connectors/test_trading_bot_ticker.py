@@ -100,3 +100,90 @@ async def test_fetch_ticker_series_connection_error_graceful():
     now = datetime.now(UTC)
     obs = await connector.fetch_ticker_series("SOLUSDT", now - timedelta(days=1), now)
     assert obs == []
+
+
+@pytest.mark.asyncio
+async def test_discover_active_trade_pairs():
+    """Verify discover_active_trade_pairs parses active pairs from Stratex positions and defaults."""
+    mock_positions = {
+        "positions": [
+            {"symbol": "DOGEUSDT", "size": 1000.0},
+            {"symbol": "BTC/USDT", "size": 0.5},
+            {"symbol": "AVAX-USDT", "size": 25.0},
+        ]
+    }
+
+    class PositionsTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            if "positions" in str(request.url):
+                return httpx.Response(200, json=mock_positions)
+            return httpx.Response(404)
+
+    connector = TradingBotConnector(
+        base_url="http://test-stratex:8000",
+        api_key="test_key",
+        transport=PositionsTransport(),
+    )
+
+    pairs = await connector.discover_active_trade_pairs()
+    assert "DOGEUSDT" in pairs
+    assert "BTCUSDT" in pairs
+    assert "AVAXUSDT" in pairs
+    # Core default pairs must always be included
+    assert "ETHUSDT" in pairs
+    assert "SOLUSDT" in pairs
+
+
+@pytest.mark.asyncio
+async def test_fetch_active_positions_success():
+    """Verify fetch_active_positions retrieves and normalizes open position dictionaries."""
+    mock_positions = [
+        {
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "size": 1.25,
+            "entry_price": 64000.0,
+            "current_price": 65500.0,
+            "unrealized_pnl": 1875.0,
+            "leverage": 10,
+            "liquidation_price": 57000.0,
+            "margin": 8000.0,
+        }
+    ]
+
+    class MockPosTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=mock_positions)
+
+    connector = TradingBotConnector(
+        base_url="http://test-stratex:8000",
+        transport=MockPosTransport(),
+    )
+
+    positions = await connector.fetch_active_positions()
+    assert len(positions) == 1
+    p = positions[0]
+    assert p["symbol"] == "BTCUSDT"
+    assert p["side"] == "LONG"
+    assert p["size"] == 1.25
+    assert p["entry_price"] == 64000.0
+    assert p["unrealized_pnl"] == 1875.0
+    assert p["leverage"] == 10
+
+
+@pytest.mark.asyncio
+async def test_scheduler_dynamic_trading_subscription_sync():
+    """Verify ForecastScheduler automatically registers subscriptions for newly discovered pairs."""
+    from futuris.infra.scheduler import ForecastScheduler
+
+    scheduler = ForecastScheduler()
+    initial_count = len(scheduler.subscriptions)
+
+    # Sync
+    targets = await scheduler.sync_dynamic_trading_subscriptions()
+    assert len(targets) >= 3
+    # Check that targets are in subscriptions
+    sub_targets = {s.target for s in scheduler.subscriptions}
+    for t in targets:
+        assert t in sub_targets
+    assert len(scheduler.subscriptions) >= initial_count

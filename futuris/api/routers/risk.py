@@ -208,3 +208,152 @@ async def stream_risk_update(
         "subscribers_delivered": delivered,
         "risk_report": payload,
     }
+
+
+@router.get("/stratex/pairs", summary="Discover All Active Pairs Traded by Stratex")
+async def get_stratex_trade_pairs(
+    user: AllowAnonymousRead = None,
+) -> dict[str, Any]:
+    _ = user
+    """Discover all active market assets/pairs currently monitored or traded by Stratex."""
+    connector = TradingBotConnector()
+    pairs = await connector.discover_active_trade_pairs()
+    return {
+        "source": "stratex",
+        "active_pairs": pairs,
+        "count": len(pairs),
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+
+@router.get("/portfolio", summary="Unified Stratex Portfolio Tail-Risk Assessment")
+async def get_portfolio_tail_risk(
+    window_days: int = Query(default=30, ge=3, le=365, description="Lookback window in days"),
+    confidence_level: float = Query(
+        default=0.95, ge=0.80, le=0.999, description="Confidence level"
+    ),
+    user: AllowAnonymousRead = None,
+    obs_repo: ObservationRepository = Depends(get_observation_repo),
+) -> dict[str, Any]:
+    _ = user
+    """Comprehensive portfolio tail-risk evaluation across all active Stratex pairs and positions.
+
+    Evaluates Value at Risk (VaR 95/99), Expected Shortfall (CVaR), Kupiec POF backtests,
+    and Basel regulatory traffic light status across the live trading book.
+    Safety Invariant: prediction_is_not_authorization.
+    """
+    now = datetime.now(UTC)
+    start_dt = now - timedelta(days=window_days)
+    connector = TradingBotConnector()
+
+    # Discover active pairs and positions
+    pairs = await connector.discover_active_trade_pairs()
+    positions = await connector.fetch_active_positions()
+
+    engine = RiskCalibrationEngine()
+    asset_reports: list[dict[str, Any]] = []
+
+    total_exposure = 0.0
+    total_margin = 0.0
+    total_unrealized_pnl = 0.0
+
+    for pos in positions:
+        size = float(pos.get("size", 0.0))
+        price = float(pos.get("current_price", 0.0))
+        notional = size * price
+        total_exposure += notional
+        total_margin += float(pos.get("margin", 0.0))
+        total_unrealized_pnl += float(pos.get("unrealized_pnl", 0.0))
+
+    # Evaluate each active pair
+    worst_traffic_light = "green"
+    highest_cvar_val = 0.0
+    highest_risk_sym = pairs[0] if pairs else "BTCUSDT"
+
+    weighted_var_sum = 0.0
+    weighted_cvar_sum = 0.0
+
+    for pair in pairs:
+        returns: list[float] = []
+
+        # Check DB observations
+        obs = await obs_repo.list_by_series(
+            series_id=f"trading:{pair.upper()}:price", limit=300, since=start_dt, until=now
+        )
+        if len(obs) >= 10:
+            prices = [o.value for o in obs if o.value > 0]
+            if len(prices) >= 10:
+                returns = [
+                    (prices[i] - prices[i - 1]) / prices[i - 1]
+                    for i in range(1, len(prices))
+                ]
+
+        if len(returns) < 10:
+            returns = _generate_calibrated_returns(pair, sample_size=max(100, window_days * 3))
+
+        report = engine.audit_risk_calibration(returns)
+
+        # Track traffic light escalation
+        if report.basel_traffic_light == "red":
+            worst_traffic_light = "red"
+        elif report.basel_traffic_light == "yellow" and worst_traffic_light != "red":
+            worst_traffic_light = "yellow"
+
+        cvar_val = float(report.metrics_95.cvar_expected_shortfall)
+        if cvar_val > highest_cvar_val:
+            highest_cvar_val = cvar_val
+            highest_risk_sym = pair
+
+        # Position weighting if matched
+        matching_pos = next((p for p in positions if p.get("symbol") == pair), None)
+        pos_exposure = (
+            float(matching_pos["size"]) * float(matching_pos["current_price"])
+            if matching_pos
+            else 0.0
+        )
+        weight = (pos_exposure / total_exposure) if total_exposure > 0 else (1.0 / len(pairs))
+
+        weighted_var_sum += float(report.metrics_95.var_historical) * weight
+        weighted_cvar_sum += cvar_val * weight
+
+        asset_reports.append(
+            {
+                "symbol": pair,
+                "sample_size": len(returns),
+                "basel_traffic_light": report.basel_traffic_light,
+                "var_95": round(float(report.metrics_95.var_historical), 4),
+                "var_99": round(float(report.metrics_99.var_historical), 4),
+                "cvar_95": round(float(report.metrics_95.cvar_expected_shortfall), 4),
+                "cvar_99": round(float(report.metrics_99.cvar_expected_shortfall), 4),
+                "kupiec_passed": not bool(report.kupiec_test_95.is_rejected),
+                "kupiec_p_value": round(float(report.kupiec_test_95.p_value), 4),
+                "breach_count_95": report.metrics_95.breach_count,
+                "weight": round(weight, 4),
+            }
+        )
+
+    portfolio_payload = {
+        "active_pairs": pairs,
+        "positions": positions,
+        "assets": asset_reports,
+        "portfolio_summary": {
+            "total_exposure_usd": round(total_exposure, 2),
+            "total_margin_usd": round(total_margin, 2),
+            "total_unrealized_pnl": round(total_unrealized_pnl, 2),
+            "portfolio_var_95": round(weighted_var_sum, 4),
+            "portfolio_cvar_95": round(weighted_cvar_sum, 4),
+            "highest_risk_asset": highest_risk_sym,
+            "overall_traffic_light": worst_traffic_light,
+            "confidence_level": confidence_level,
+            "lookback_window_days": window_days,
+        },
+        "prediction_is_not_authorization": True,
+        "timestamp": now.isoformat(),
+    }
+
+    try:
+        await stream_hub.broadcast("risk_portfolio_update", portfolio_payload)
+    except Exception as exc:
+        logger.warning("portfolio_stream_broadcast_failed", error=str(exc))
+
+    return portfolio_payload
