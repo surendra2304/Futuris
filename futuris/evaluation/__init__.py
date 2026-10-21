@@ -19,10 +19,17 @@ from futuris.evaluation.metrics import (
     ranking_precision_recall,
     rmse,
 )
+from futuris.evaluation.risk_calibration import (
+    BacktestResult,
+    RiskCalibrationEngine,
+    RiskCalibrationReport,
+    RiskMetrics,
+)
 
 __all__ = [
     "BacktestEngine",
     "BacktestReport",
+    "BacktestResult",
     "CalibrationAnalyzer",
     "ConfidenceAssessmentResult",
     "ConfidenceAssessor",
@@ -30,6 +37,9 @@ __all__ = [
     "DriftStatus",
     "HorizonMetrics",
     "ReliabilityCurve",
+    "RiskCalibrationEngine",
+    "RiskCalibrationReport",
+    "RiskMetrics",
     "brier_score",
     "calibration_error",
     "confidence_assessor",

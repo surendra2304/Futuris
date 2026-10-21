@@ -15,6 +15,7 @@ from futuris.models.diffusion_forecaster import (
     BassDiffusionModelAdapter,
     HawkesProcessCascadeAdapter,
 )
+from futuris.models.volatility_forecaster import GARCHVolatilityModelAdapter
 
 
 class ModelRegistry:
@@ -30,6 +31,7 @@ class ModelRegistry:
             "mean_ensemble": MeanEnsembleAdapter,
             "bass_diffusion": BassDiffusionModelAdapter,
             "hawkes_cascade": HawkesProcessCascadeAdapter,
+            "garch_volatility": GARCHVolatilityModelAdapter,
         }
 
     def get_adapter(
