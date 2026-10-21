@@ -23,7 +23,7 @@ from futuris.evidence.snapshots import EvidenceSnapshotter
 from futuris.features.contextualize import ContextLayer
 from futuris.features.drivers import DriverAnalyzer
 from futuris.features.normalize import Normalizer, TrustedSignalSet
-from futuris.infra.cpu import cpu_saturated, run_cpu
+from futuris.infra.cpu import cpu_saturated, run_cpu, run_cpu_process
 from futuris.infra.logging import get_logger
 from futuris.models.base import ModelPrediction
 from futuris.models.registry import model_registry
@@ -154,6 +154,15 @@ class ModelingStage:
         concurrent requests.
         """
         saturated = cpu_saturated()
+        if type(self.router) is ModelRouter:
+            return await run_cpu_process(
+                "modeling",
+                _fit_modeling_in_worker,
+                inp,
+                evidence_ref,
+                saturated,
+                _exclusive=not saturated,
+            )
         return await run_cpu(
             "modeling",
             self._fit_and_predict,
@@ -426,3 +435,17 @@ class ForecastingPipeline:
             recommendations=recs,
             stage_durations_ms=durations,
         )
+
+
+
+def _fit_modeling_in_worker(
+    inp: ModelingInput,
+    evidence_ref: EvidenceRef,
+    cpu_saturated: bool,
+) -> ModelingOutput:
+    """Spawn-safe process entrypoint for default model selection and fitting."""
+    return ModelingStage()._fit_and_predict(
+        inp,
+        evidence_ref,
+        cpu_saturated=cpu_saturated,
+    )

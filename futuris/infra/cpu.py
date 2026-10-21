@@ -21,6 +21,11 @@ import asyncio
 import os
 import time
 import weakref
+import threading
+from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+from functools import partial
+from multiprocessing import get_context
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -41,26 +46,30 @@ _gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] 
 _pending = 0
 
 
+def _combined_pending() -> int:
+    with _process_pending_lock:
+        process_pending = _process_pending
+    return _pending + process_pending
+
+
 def cpu_has_headroom() -> bool:
     """Whether one more request should run the full candidate search.
 
-    Deliberately stricter than "a free slot exists": a CPU slot is kept for the
-    cheap path so that a burst never queues *behind* a full search. Measured
-    before this rule, a 6-request burst on 2 vCPUs took 54s; with two full
-    searches admitted it took 18s; admitting one full search and answering the
-    rest from the cheap path bounds the whole burst at ~9s.
+    Keep one capacity slot for short/degraded work. Both thread and process jobs
+    contribute to admission pressure, including process work still running after
+    its original request was cancelled.
     """
-    return _pending < max(1, CPU_SLOTS - 1)
+    return _combined_pending() < max(1, CPU_SLOTS - 1)
 
 
 def cpu_saturated() -> bool:
-    """True when new work should skip the expensive candidate fits."""
+    """True when new work should skip expensive candidate fits."""
     return not cpu_has_headroom()
 
 
 def cpu_queue_depth() -> int:
-    """How many jobs are queued behind the busy slots (0 when idle)."""
-    return max(0, _pending - CPU_SLOTS)
+    """How many jobs exceed the configured CPU capacity (zero when idle)."""
+    return max(0, _combined_pending() - CPU_SLOTS)
 
 
 def cpu_gate() -> asyncio.Semaphore:
@@ -111,3 +120,141 @@ async def _in_thread(
         return await asyncio.to_thread(func, *args, **kwargs)
     finally:
         CPU_WORK_IN_FLIGHT.labels(kind).dec()
+
+
+# The thread executor preserves responsiveness for I/O-heavy functions, but some
+# numerical optimizers can hold the GIL for seconds. Default model fitting is
+# therefore isolated in a small, persistent process pool. It is intentionally
+# separate from run_cpu: only top-level, picklable worker functions belong here.
+_process_pool_lock = threading.Lock()
+_process_pending_lock = threading.Lock()
+_process_pool: ProcessPoolExecutor | None = None
+_process_pending = 0
+_process_gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _configured_process_workers() -> int:
+    raw = os.environ.get("FUTURIS_CPU_PROCESS_WORKERS", "2")
+    try:
+        requested = int(raw)
+    except ValueError as exc:
+        raise RuntimeError("FUTURIS_CPU_PROCESS_WORKERS must be a positive integer") from exc
+    if requested < 1:
+        raise RuntimeError("FUTURIS_CPU_PROCESS_WORKERS must be a positive integer")
+    return min(CPU_SLOTS, requested)
+
+
+CPU_PROCESS_WORKERS = _configured_process_workers()
+
+
+def _get_cpu_process_pool() -> ProcessPoolExecutor:
+    """Lazily create the bounded spawn-based pool, safely across request threads."""
+    global _process_pool
+    with _process_pool_lock:
+        if _process_pool is None:
+            _process_pool = ProcessPoolExecutor(
+                max_workers=CPU_PROCESS_WORKERS,
+                mp_context=get_context("spawn"),
+            )
+        return _process_pool
+
+
+def _process_gate() -> asyncio.Semaphore:
+    """Return a semaphore bound to the current loop for process submissions."""
+    loop = asyncio.get_running_loop()
+    gate = _process_gates.get(loop)
+    if gate is None:
+        gate = asyncio.Semaphore(CPU_PROCESS_WORKERS)
+        _process_gates[loop] = gate
+    return gate
+
+
+def _process_job_finished(kind: str, future: Future[Any]) -> None:
+    """Update counters only when the submitted process work really finishes."""
+    global _process_pending
+    CPU_WORK_IN_FLIGHT.labels(kind).dec()
+    with _process_pending_lock:
+        _process_pending = max(0, _process_pending - 1)
+    CPU_QUEUE_DEPTH.set(cpu_queue_depth())
+
+
+def _discard_broken_pool(pool: ProcessPoolExecutor) -> None:
+    """Allow a later request to construct a fresh pool after a worker crash."""
+    global _process_pool
+    with _process_pool_lock:
+        if _process_pool is pool:
+            _process_pool = None
+    # Broken pools should be discarded without blocking the request loop.
+    pool.shutdown(wait=False, cancel_futures=True)
+
+
+async def run_cpu_process(
+    kind: str,
+    func: Callable[..., T],
+    *args: Any,
+    _exclusive: bool = True,
+    **kwargs: Any,
+) -> T:
+    """Run a picklable CPU-bound operation in a bounded worker process.
+
+    func must be a module-level function, and every argument/result must be
+    picklable. A completion callback owns the process-pending counter so a
+    cancelled HTTP waiter does not falsely make still-running CPU work look idle.
+    """
+    global _process_pending
+    submitted = False
+    with _process_pending_lock:
+        _process_pending += 1
+    CPU_QUEUE_DEPTH.set(cpu_queue_depth())
+
+    async def submit_and_wait() -> T:
+        nonlocal submitted
+        pool = _get_cpu_process_pool()
+        future = pool.submit(partial(func, *args, **kwargs))
+        submitted = True
+        CPU_WORK_IN_FLIGHT.labels(kind).inc()
+        future.add_done_callback(lambda completed: _process_job_finished(kind, completed))
+        try:
+            return await asyncio.wrap_future(future)
+        except BrokenProcessPool:
+            _discard_broken_pool(pool)
+            raise
+
+    try:
+        if not _exclusive:
+            return await submit_and_wait()
+
+        gate = _process_gate()
+        if gate.locked():
+            queued_at = time.perf_counter()
+            async with gate:
+                wait = time.perf_counter() - queued_at
+                CPU_QUEUE_WAIT_SECONDS.labels(kind).observe(wait)
+                logger.info("cpu_process_queue_wait", kind=kind, wait_seconds=round(wait, 3))
+                return await submit_and_wait()
+        async with gate:
+            return await submit_and_wait()
+    finally:
+        # Once submitted, the worker-future callback decrements this counter
+        # after actual completion (even if the HTTP task has been cancelled).
+        if not submitted:
+            with _process_pending_lock:
+                _process_pending = max(0, _process_pending - 1)
+            CPU_QUEUE_DEPTH.set(cpu_queue_depth())
+
+
+def _shutdown_cpu_process_pool_sync() -> None:
+    """Drain and close the pool without holding the application's event loop."""
+    global _process_pool
+    with _process_pool_lock:
+        pool = _process_pool
+        _process_pool = None
+    if pool is not None:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+async def shutdown_cpu_process_pool() -> None:
+    """Gracefully drain and close model workers during application shutdown."""
+    await asyncio.to_thread(_shutdown_cpu_process_pool_sync)
