@@ -22,7 +22,7 @@ class CalibrationResponse(BaseModel):
     bin_centers: list[float]
     observed_frequencies: list[float]
     bin_counts: list[int]
-    expected_calibration_error: float
+    expected_calibration_error: float | None
     sample_count: int = 0
     calibration_method: str = "empirical_binned"
     data_freshness: str = "live"
@@ -57,7 +57,7 @@ async def get_calibration(
             bin_centers=[],
             observed_frequencies=[],
             bin_counts=[],
-            expected_calibration_error=0.0,
+            expected_calibration_error=None,
             sample_count=0,
             calibration_method="empirical_binned",
             data_freshness="insufficient_data",

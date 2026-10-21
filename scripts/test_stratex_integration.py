@@ -62,11 +62,23 @@ async def main():
         assert resp3.status_code == 200
         data3 = resp3.json()
         assert "accuracy_pct" in data3
-        assert data3["status"] == "ACTIVE"
-        print(
-            "  -> [PASS] Accuracy Endpoint: {data3['accuracy_pct']}% accuracy, "
-                "Brier={data3['brier_score']}"
-        )
+        assert data3["status"] in {"ACTIVE", "partial", "insufficient_data"}
+        if data3["status"] == "insufficient_data":
+            assert data3["accuracy_pct"] is None
+            assert data3["brier_score"] is None
+            print("  -> [PASS] Accuracy Endpoint: not measured; no resolved outcomes yet")
+        else:
+            accuracy = (
+                f"{data3['accuracy_pct']}%"
+                if data3["accuracy_pct"] is not None
+                else "not measured"
+            )
+            brier = (
+                data3["brier_score"]
+                if data3["brier_score"] is not None
+                else "not measured"
+            )
+            print(f"  -> [PASS] Accuracy Endpoint: {accuracy} accuracy, Brier={brier}")
 
         # 4. Test Inbound IntelX Catalyst Webhook
         print("\n[TEST 4] Testing POST /v1/webhooks/research-finding-relevant (IntelX Catalyst)")

@@ -106,8 +106,8 @@ class MarketForecastResponse(BaseModel):
 
 class MarketAccuracyResponse(BaseModel):
     total_evaluated: int
-    accuracy_pct: float
-    brier_score: float
+    accuracy_pct: float | None
+    brier_score: float | None
     status: str
     recent_records: list[dict[str, Any]] = []
     evidence_class: EvidenceClass | None = None
@@ -234,8 +234,6 @@ async def _generate_market_prediction(
         drivers_list.append(f"telemetry_equity_level:${equity_val:.0f}")
     if top_findings:
         drivers_list.append(f"intelx:{top_findings[0][:40]}")
-    else:
-        drivers_list.append("intelx:market_liquidity_baseline")
 
     # 4. Compute Drawdown Risk
     base_dd_prob = min(
@@ -527,10 +525,10 @@ async def get_market_accuracy(
 ) -> MarketAccuracyResponse:
     """Empirical accuracy of resolved market forecasts, computed from stored outcomes.
 
-    Returns ``status="insufficient_data"`` with zero counts when no market
-    forecast has been resolved yet. Nothing here is estimated or assumed: every
-    number is derived from the outcome rows in this database, and the sample
-    size is reported alongside so a client can see how thin the evidence is.
+    Metrics without outcome samples are null, never zero-valued substitutes.
+    Accuracy uses interval containment over all resolved forecasts; Brier score
+    uses only forecasts that carry a probability. A partial probability sample is
+    labeled partial, and the exact sample size is reported to callers.
     """
     _ = user
     pairs = await OutcomeRepository(session).list_resolved_with_forecasts(target_prefix="market:")
@@ -539,8 +537,8 @@ async def get_market_accuracy(
     if total == 0:
         return MarketAccuracyResponse(
             total_evaluated=0,
-            accuracy_pct=0.0,
-            brier_score=0.0,
+            accuracy_pct=None,
+            brier_score=None,
             status="insufficient_data",
             evidence_class=None,
             sample_note="no resolved market forecasts yet",
@@ -566,12 +564,13 @@ async def get_market_accuracy(
             }
         )
 
-    brier = round(sum(brier_terms) / len(brier_terms), 4) if brier_terms else 0.0
+    brier = round(sum(brier_terms) / len(brier_terms), 4) if brier_terms else None
+    is_partial = len(brier_terms) < total
     return MarketAccuracyResponse(
         total_evaluated=total,
         accuracy_pct=round((contained / total) * 100.0, 2),
         brier_score=brier,
-        status="ACTIVE",
+        status="partial" if is_partial else "ACTIVE",
         evidence_class=EvidenceClass.DERIVED,
         sample_note=f"{len(brier_terms)} of {total} resolved forecasts carried a probability",
         recent_records=recent_records[-20:],
