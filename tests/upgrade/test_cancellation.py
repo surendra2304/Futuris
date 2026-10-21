@@ -45,6 +45,25 @@ class CancellationTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(task, timeout=1)
         self.assertTrue(cleaned.is_set())
 
+    async def test_caller_cancellation_cancels_operation(self):
+        token = CancellationToken()
+        started = asyncio.Event()
+        cleaned = asyncio.Event()
+
+        async def work() -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaned.set()
+
+        task = asyncio.create_task(await_or_cancel(work(), token))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+        self.assertTrue(cleaned.is_set())
+
     async def test_gather_returns_results(self):
         results = await gather_cancel_safe(
             asyncio.sleep(0, result="a"),
