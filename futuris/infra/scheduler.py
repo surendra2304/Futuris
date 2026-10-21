@@ -104,7 +104,7 @@ class ForecastScheduler:
         return prob_diff < delta_prob_threshold and pred_diff < delta_pred_threshold
 
     async def sync_dynamic_trading_subscriptions(self) -> list[str]:
-        """Query Stratex to discover any newly active trading pairs and auto-register subscriptions."""
+        """Query Stratex to discover active trading pairs and register subscriptions."""
         from futuris.connectors.trading_bot import TradingBotConnector
 
         discovered_targets: list[str] = []

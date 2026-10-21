@@ -104,7 +104,7 @@ async def test_fetch_ticker_series_connection_error_graceful():
 
 @pytest.mark.asyncio
 async def test_discover_active_trade_pairs():
-    """Verify discover_active_trade_pairs parses active pairs from Stratex positions and defaults."""
+    """Verify discover_active_trade_pairs parses active pairs from Stratex positions."""
     mock_positions = {
         "positions": [
             {"symbol": "DOGEUSDT", "size": 1000.0},
