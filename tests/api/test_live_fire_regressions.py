@@ -122,6 +122,45 @@ async def _create_forecast(client: httpx.AsyncClient, target: str = "service:t:c
 
 
 @pytest.mark.asyncio
+async def test_idempotency_miss_releases_read_transaction_before_research(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cache-miss transaction must not remain open through the model fit."""
+    from futuris.api.routers import friday as friday_router
+
+    observed_sessions: list[AsyncSession] = []
+    original_lookup = ForecastRepository.get_by_idempotency_key
+
+    async def track_lookup(repository: ForecastRepository, key: str):
+        observed_sessions.append(repository.session)
+        return await original_lookup(repository, key)
+
+    async def verify_transaction_closed(*args, **kwargs):
+        assert observed_sessions, "idempotency lookup must precede research enrichment"
+        assert not observed_sessions[-1].in_transaction(), (
+            "the idempotency cache-miss read transaction must be rolled back before "
+            "remote enrichment or model fitting"
+        )
+        return []
+
+    monkeypatch.setattr(ForecastRepository, "get_by_idempotency_key", track_lookup)
+    monkeypatch.setattr(friday_router, "fetch_research_reports", verify_transaction_closed)
+
+    response = await client.post(
+        "/v1/friday/forecast",
+        headers=FRIDAY,
+        json={
+            "friday_request_id": f"req_transaction_{uuid4().hex[:8]}",
+            "target": "service:checkout:capacity_exceedance_24h",
+            "horizon": "1h",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert len(observed_sessions) == 1
+
+
+@pytest.mark.asyncio
 async def test_concurrent_delegation_with_one_key_creates_one_forecast(
     client: httpx.AsyncClient,
 ):

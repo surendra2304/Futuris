@@ -419,6 +419,13 @@ async def delegate_forecast(
                 )
             return _friday_forecast_response(req, cached)
 
+        # A cache-miss SELECT opens a SQLAlchemy read transaction. Keeping that
+        # snapshot open through the expensive model fit makes SQLite WAL unable
+        # to upgrade the transaction to a writer if another same-key request
+        # commits first (SQLITE_BUSY_SNAPSHOT). End the read transaction before
+        # any remote or CPU-heavy work; persistence starts a fresh transaction.
+        await session.rollback()
+
     # 2. Check Staleness & Insufficient Data if telemetry data is provided
     t_data = req.telemetry_data or req.context.get("telemetry_data")
     if t_data is not None:
