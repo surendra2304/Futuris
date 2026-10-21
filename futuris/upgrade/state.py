@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from .models import JobState
 
 
 class InvalidTransitionError(RuntimeError):
-    pass
+    """Raised when a state transition violates the lifecycle contract."""
 
 
 _ALLOWED: dict[JobState, set[JobState]] = {
@@ -26,7 +26,7 @@ _ALLOWED: dict[JobState, set[JobState]] = {
 class VersionedState:
     state: JobState
     version: int = 0
-    updated_at: datetime = datetime.now(UTC)
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class StateMachine:
