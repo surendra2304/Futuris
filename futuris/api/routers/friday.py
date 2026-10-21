@@ -419,6 +419,15 @@ async def delegate_forecast(
                 )
             return _friday_forecast_response(req, cached)
 
+        # A cache miss leaves a SQLite read transaction open. The research and
+        # forecast pipeline below can take seconds; if another request commits
+        # while this snapshot is held, SQLite cannot upgrade it to a writer and
+        # raises SQLITE_BUSY_SNAPSHOT immediately (busy_timeout does not help).
+        # No writes have been made yet, so release the read transaction before
+        # the long-running work. The later insert starts a fresh transaction;
+        # the unique idempotency index still arbitrates concurrent callers.
+        await session.rollback()
+
     # 2. Check Staleness & Insufficient Data if telemetry data is provided
     t_data = req.telemetry_data or req.context.get("telemetry_data")
     if t_data is not None:

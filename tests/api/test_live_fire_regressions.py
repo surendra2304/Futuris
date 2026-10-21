@@ -173,6 +173,42 @@ async def test_idempotency_key_reuse_with_different_payload_conflicts(
     assert second.status_code == 409, second.text
 
 
+@pytest.mark.asyncio
+async def test_idempotency_cache_miss_releases_read_transaction_before_research(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+    """A cache miss releases its SQLite read transaction before network/model work."""
+    from futuris.api.routers import friday as friday_router_module
+
+    observed: dict[str, object] = {}
+    original_lookup = ForecastRepository.get_by_idempotency_key
+
+    async def track_lookup(self: ForecastRepository, key: str):
+        observed["session"] = self.session
+        return await original_lookup(self, key)
+
+    async def stop_before_pipeline(_target: str, *, as_of: datetime):
+        session = observed["session"]
+        observed["transaction_open_during_research"] = session.in_transaction()
+        raise RuntimeError("stop after validating transaction boundary")
+
+    monkeypatch.setattr(ForecastRepository, "get_by_idempotency_key", track_lookup)
+    monkeypatch.setattr(friday_router_module, "fetch_research_reports", stop_before_pipeline)
+
+    response = await client.post(
+        "/v1/friday/forecast",
+        headers=FRIDAY,
+        json={
+            "friday_request_id": f"req_tx_{uuid4().hex[:8]}",
+            "target": "service:checkout:capacity_exceedance_24h",
+            "horizon": "1h",
+        },
+    )
+
+    assert response.status_code == 500
+    assert observed["transaction_open_during_research"] is False
+
+
 # ── lifecycle integrity ──────────────────────────────────────────────────────
 
 
