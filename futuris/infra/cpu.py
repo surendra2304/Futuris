@@ -212,7 +212,13 @@ async def run_cpu_process(
     async def submit_and_wait() -> T:
         nonlocal submitted
         pool = _get_cpu_process_pool()
-        future = pool.submit(partial(func, *args, **kwargs))
+        try:
+            future = pool.submit(partial(func, *args, **kwargs))
+        except BrokenProcessPool:
+            # A worker may have died while the pool was idle. In that case
+            # submit() itself raises, before there is a Future to await.
+            _discard_broken_pool(pool)
+            raise
         submitted = True
         CPU_WORK_IN_FLIGHT.labels(kind).inc()
         future.add_done_callback(lambda completed: _process_job_finished(kind, completed))

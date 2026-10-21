@@ -67,3 +67,31 @@ async def test_process_computation_does_not_starve_event_loop():
         finished.set()
         await pulse
         await shutdown_cpu_process_pool()
+
+
+@pytest.mark.asyncio
+async def test_broken_pool_on_submit_is_discarded(monkeypatch: pytest.MonkeyPatch):
+    import futuris.infra.cpu as cpu_module
+    from concurrent.futures.process import BrokenProcessPool
+
+    class AlreadyBrokenPool:
+        shutdown_called = False
+
+        def submit(self, _fn):
+            raise BrokenProcessPool("worker exited while pool was idle")
+
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            assert wait is False
+            assert cancel_futures is True
+            self.shutdown_called = True
+
+    broken = AlreadyBrokenPool()
+    monkeypatch.setattr(cpu_module, "_process_pool", broken)
+
+    with pytest.raises(BrokenProcessPool, match="while pool was idle"):
+        await cpu_module.run_cpu_process(
+            "test", _add_numbers, 1, 2, _exclusive=False
+        )
+
+    assert cpu_module._process_pool is None
+    assert broken.shutdown_called is True
