@@ -183,6 +183,12 @@ async def lifespan(_app: FastAPI):
         task.cancel()
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
+    try:
+        from futuris.infra.cpu import shutdown_cpu_process_pool
+
+        await shutdown_cpu_process_pool()
+    except Exception as exc:
+        logger.error("cpu_process_pool_shutdown_failed", error=type(exc).__name__)
     await event_emitter.aclose()
     from futuris.storage.db import checkpoint_and_close_db
 

@@ -15,7 +15,7 @@ from futuris.features.contextualize import ContextLayer
 from futuris.features.drivers import DriverAnalyzer
 from futuris.features.normalize import Normalizer
 from futuris.infra.config import settings
-from futuris.infra.cpu import cpu_saturated, run_cpu
+from futuris.infra.cpu import cpu_saturated, run_cpu, run_cpu_process
 from futuris.infra.logging import get_logger
 from futuris.models.ai_universe_enhanced import AIUniverseModelEnhancer
 from futuris.models.base import ModelPrediction
@@ -93,6 +93,26 @@ class ForecastEngine:
             logger.warning("intelx_context_injection_skipped", target=target, error=str(exc))
 
         degraded = cpu_saturated()
+        if self._supports_process_isolation():
+            return await run_cpu_process(
+                "orchestrate",
+                _orchestrate_with_default_components,
+                str(self.snapshotter.base_storage_path),
+                sorted(self.snapshotter.denied_fields),
+                float(self.enhancer.confidence_scaling),
+                _exclusive=not degraded,
+                target=target,
+                as_of=as_of,
+                horizon=horizon,
+                capacity_threshold=capacity_threshold,
+                raw_observations=raw_observations,
+                intelx_reports=intelx_reports,
+                exogenous_adj=exogenous_adj,
+                evidence_scope=evidence_scope,
+                historical_resolved_count=historical_resolved_count,
+                model_budget_seconds=model_budget_seconds,
+                cpu_saturated=degraded,
+            )
         return await run_cpu(
             "orchestrate",
             self._orchestrate_sync,
@@ -108,6 +128,18 @@ class ForecastEngine:
             historical_resolved_count=historical_resolved_count,
             model_budget_seconds=model_budget_seconds,
             cpu_saturated=degraded,
+        )
+
+    def _supports_process_isolation(self) -> bool:
+        """Use a fresh worker only when all CPU-stage dependencies are known defaults."""
+        return (
+            type(self.snapshotter) is EvidenceSnapshotter
+            and type(self.normalizer) is Normalizer
+            and type(self.context_layer) is ContextLayer
+            and type(self.router) is ModelRouter
+            and type(self.confidence_assessor) is ConfidenceAssessor
+            and type(self.driver_analyzer) is DriverAnalyzer
+            and type(self.enhancer) is AIUniverseModelEnhancer
         )
 
     def _orchestrate_sync(
@@ -281,3 +313,44 @@ class ForecastEngine:
         )
 
         return [forecast]
+
+
+
+def _orchestrate_with_default_components(
+    snapshot_path: str,
+    denied_fields: list[str],
+    confidence_scaling: float,
+    *,
+    target: str,
+    as_of: datetime,
+    horizon: timedelta,
+    capacity_threshold: float,
+    raw_observations: list[Observation],
+    intelx_reports: list[Any],
+    exogenous_adj: dict[str, float],
+    evidence_scope: str,
+    historical_resolved_count: int,
+    model_budget_seconds: float | None = None,
+    cpu_saturated: bool = False,
+) -> list[Forecast]:
+    """Spawn-safe CPU worker entrypoint; recreates stateless default components."""
+    engine = ForecastEngine(
+        snapshotter=EvidenceSnapshotter(
+            base_storage_path=snapshot_path,
+            denied_fields=set(denied_fields),
+        ),
+        enhancer=AIUniverseModelEnhancer(confidence_scaling=confidence_scaling),
+    )
+    return engine._orchestrate_sync(
+        target=target,
+        as_of=as_of,
+        horizon=horizon,
+        capacity_threshold=capacity_threshold,
+        raw_observations=raw_observations,
+        intelx_reports=intelx_reports,
+        exogenous_adj=exogenous_adj,
+        evidence_scope=evidence_scope,
+        historical_resolved_count=historical_resolved_count,
+        model_budget_seconds=model_budget_seconds,
+        cpu_saturated=cpu_saturated,
+    )
