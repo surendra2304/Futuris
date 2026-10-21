@@ -3,8 +3,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
-
 from futuris.api.routers.friday import FridayForecastRequest, _friday_forecast_response
 from futuris.core.enums import ConfidenceLevel, ForecastStatus
 
