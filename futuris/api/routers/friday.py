@@ -183,7 +183,8 @@ def _honest_calibration(forecast: Any) -> tuple[float | None, dict[str, Any]]:
         }
         brier_score = metrics.get("brier_score")
         if (
-            isinstance(brier_score, (int, float))
+            resolved > 0
+            and isinstance(brier_score, (int, float))
             and not isinstance(brier_score, bool)
             and isfinite(brier_score)
             and 0.0 <= brier_score <= 1.0
@@ -350,7 +351,11 @@ def _friday_forecast_response(
             DriverItem(
                 metric=d.name,
                 correlation=d.strength if d.direction == "increases_risk" else -d.strength,
-                lead_time="2h (lag-2 peak)" if d.leading_or_lagging == "leading" else "0h (concurrent)",
+                lead_time=(
+                    "2h (lag-2 peak)"
+                    if d.leading_or_lagging == "leading"
+                    else "0h (concurrent)"
+                ),
             )
             for d in forecast.drivers
         ]
