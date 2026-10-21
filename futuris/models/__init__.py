@@ -9,13 +9,19 @@ from futuris.models.adapters import (
     SeasonalNaiveAdapter,
 )
 from futuris.models.base import ModelAdapter, ModelPrediction, PredictionIntervals
+from futuris.models.diffusion_forecaster import (
+    BassDiffusionModelAdapter,
+    HawkesProcessCascadeAdapter,
+)
 from futuris.models.registry import ModelRegistry, model_registry
 from futuris.models.routing import ModelRouter, SeriesMetadata
 
 __all__ = [
     "AutoARIMAAdapter",
     "AutoETSAdapter",
+    "BassDiffusionModelAdapter",
     "DriftAdapter",
+    "HawkesProcessCascadeAdapter",
     "MeanEnsembleAdapter",
     "ModelAdapter",
     "ModelPrediction",

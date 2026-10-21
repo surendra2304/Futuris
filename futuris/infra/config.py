@@ -141,15 +141,23 @@ class Settings(BaseSettings):
         default="http://sentinel:8000",
         description="Live Sentinel URL",
     )
+    VYRALX_URL: str = Field(
+        default="http://vyralx:8000",
+        description="Live VyralX Viral Diffusion & Social Trend Engine URL",
+    )
+    VYRALX_API_KEY: str | None = Field(
+        default=None,
+        description="Live VyralX API Key",
+    )
     FRIDAY_URL: str = Field(
         default="http://friday:10000",
         description="Live Friday URL",
     )
-    FUTURIS_TELEMETRY_SOURCE: Literal["synthetic", "nexus"] = Field(
+    FUTURIS_TELEMETRY_SOURCE: Literal["synthetic", "nexus", "vyralx"] = Field(
         default="synthetic",
         description=(
             "Telemetry source for the unattended scheduler: the deterministic "
-            "synthetic generator (default) or the NEXUS telemetry broker."
+            "synthetic generator (default), NEXUS telemetry broker, or VyralX trend stream."
         ),
     )
     NEXUS_URL: str = Field(
