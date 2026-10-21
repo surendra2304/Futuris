@@ -2,24 +2,25 @@
   "task": 2,
   "repository": "Futuris",
   "branch": "automation/friday-universe-task-2",
-  "finished_at": "2026-10-20T23:13:19Z",
-  "active_coding_seconds": 1729,
-  "passes": 4,
+  "finished_at": "2026-10-21T01:03:03Z",
+  "active_coding_seconds": 4,
+  "passes": 1,
   "status": "failed",
   "failures": [
-    "Pass 4 failed with exit 1. See log pass-4.log."
+    "Pass 1 failed with exit 1. See log pass-1.log."
   ],
   "source_paths_vs_main": [
+    "futuris/api/routers/friday.py",
     "futuris/core/pipeline.py",
     "futuris/core/schemas.py",
     "futuris/evaluation/calibration.py",
     "futuris/storage/repositories.py",
+    "github/friday-continuation/task-2-checkpoint.md",
     "tests/core/test_provenance.py",
     "tests/evaluation/test_evaluation.py",
     "tests/storage/test_repositories.py",
     "tests/test_friday_delegation.py",
-    "tests/test_prompt7_futuris.py",
-    "uturis/api/routers/friday.py"
+    "tests/test_prompt7_futuris.py"
   ],
   "checkpoint_path": ".github/friday-continuation/task-2-checkpoint.md",
   "next_run_prompt_path": ".github/friday-continuation/task-2-next-run.md",
