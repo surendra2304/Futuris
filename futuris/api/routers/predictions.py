@@ -344,7 +344,7 @@ async def build_universe_matrix(
     # never a fabricated zero estimate classified as NOMINAL.
     domain_map: dict[UniverseDomain, list[TargetPostureItem]] = {d: [] for d in UniverseDomain}
     risks_by_domain: dict[UniverseDomain, list[RiskLevel]] = {d: [] for d in UniverseDomain}
-    unknown_by_domain: dict[UniverseDomain, int] = {d: 0 for d in UniverseDomain}
+    unknown_by_domain: dict[UniverseDomain, int] = dict.fromkeys(UniverseDomain, 0)
     all_risks: list[RiskLevel] = []
     scored_target_count = 0
     unknown_target_count = 0
