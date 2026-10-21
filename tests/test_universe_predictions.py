@@ -55,6 +55,26 @@ async def test_universe_matrix_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_empty_universe_matrix_reports_unknown_not_nominal():
+    """An empty universe must not be reported as 100/100 healthy."""
+    import futuris.api.routers.predictions as predictions_router
+    import futuris.core.universe_domains as universe_domains
+    import futuris.storage.db as storage_db
+
+    async with storage_db.async_session_factory() as session:
+        matrix = await predictions_router.build_universe_matrix(session, budget_seconds=0)
+
+    assert matrix.overall_posture == universe_domains.RiskLevel.UNKNOWN
+    assert matrix.ecosystem_health_score is None
+    assert matrix.scored_target_count == 0
+    assert matrix.unknown_target_count == len(universe_domains.UNIVERSE_TARGETS)
+    assert all(
+        domain.risk_level == universe_domains.RiskLevel.UNKNOWN
+        for domain in matrix.domains
+    )
+
+
+@pytest.mark.asyncio
 async def test_universal_prediction_request_sentinel():
     """Verify POST /v1/predictions/predict for Sentinel security target."""
     async with (
@@ -75,6 +95,25 @@ async def test_universal_prediction_request_sentinel():
         assert "mitigation_action" in data
         assert "risk_level" in data
         assert data["confidence"] in ["HIGH", "MEDIUM", "LOW"]
+
+
+@pytest.mark.asyncio
+async def test_universal_prediction_without_evidence_reports_unknown_risk():
+    """No caller estimate plus no telemetry must not be presented as NOMINAL."""
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+    ):
+        response = await client.post(
+            "/v1/predictions/predict",
+            json={"target": "sentinel:security:threat_anomaly_risk_24h", "context": {}},
+            headers=ANALYST_HEADERS,
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "insufficient_data"
+    assert payload["risk_level"] == "UNKNOWN"
 
 
 @pytest.mark.asyncio

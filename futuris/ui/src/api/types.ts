@@ -106,7 +106,7 @@ export interface EcosystemOverview {
   timestamp: string;
 }
 
-export type RiskLevel = 'NOMINAL' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
+export type RiskLevel = 'UNKNOWN' | 'NOMINAL' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
 
 export interface TargetPostureItem {
   target: string;
@@ -133,10 +133,12 @@ export interface DomainPostureSummary {
 }
 
 export interface UniverseMatrixResponse {
-  ecosystem_health_score: number;
+  ecosystem_health_score: number | null;
   overall_posture: RiskLevel;
   total_domains: number;
   total_active_targets: number;
+  scored_target_count: number;
+  unknown_target_count: number;
   domains: DomainPostureSummary[];
   timestamp: string;
 }

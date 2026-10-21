@@ -139,10 +139,12 @@ class DomainPostureSummary(BaseModel):
 
 
 class UniverseMatrixResponse(BaseModel):
-    ecosystem_health_score: float
+    ecosystem_health_score: float | None
     overall_posture: RiskLevel
     total_domains: int
     total_active_targets: int
+    scored_target_count: int
+    unknown_target_count: int
     domains: list[DomainPostureSummary]
     timestamp: datetime
 
@@ -199,7 +201,11 @@ async def request_universe_prediction(
         },
     )
 
-    risk = evaluate_risk_level(spec, fc.prediction, fc.probability)
+    risk = (
+        evaluate_risk_level(spec, fc.prediction, fc.probability)
+        if fc.status == ForecastStatus.ACTIVE
+        else RiskLevel.UNKNOWN
+    )
     interp = spec.interpretation_template.format(
         prediction=fc.prediction,
         probability=_display_probability_percent(spec, fc),
@@ -309,7 +315,13 @@ async def build_universe_matrix(
         fc = latest_by_target.get(target)
         if not fc:
             continue
-        risk = evaluate_risk_level(spec, fc.prediction, fc.probability)
+        # An insufficient/blocked answer is not evidence of nominal risk.
+        # Only active forecasts with a usable prediction contribute to the score.
+        risk = (
+            evaluate_risk_level(spec, fc.prediction, fc.probability)
+            if fc.status == ForecastStatus.ACTIVE
+            else RiskLevel.UNKNOWN
+        )
         all_risks.append(risk)
         interp = spec.interpretation_template.format(
             prediction=fc.prediction,
@@ -353,13 +365,20 @@ async def build_universe_matrix(
 
     for d in UniverseDomain:
         items = domain_map[d]
-        d_risk = RiskLevel.NOMINAL
-        if any(i.risk_level == RiskLevel.CRITICAL for i in items):
+        known_risks = [i.risk_level for i in items if i.risk_level != RiskLevel.UNKNOWN]
+        expected_target_count = sum(1 for spec in UNIVERSE_TARGETS.values() if spec.domain == d)
+        has_unknown_targets = len(known_risks) < expected_target_count
+        if any(risk == RiskLevel.CRITICAL for risk in known_risks):
             d_risk = RiskLevel.CRITICAL
-        elif any(i.risk_level == RiskLevel.HIGH for i in items):
+        elif any(risk == RiskLevel.HIGH for risk in known_risks):
             d_risk = RiskLevel.HIGH
-        elif any(i.risk_level == RiskLevel.ELEVATED for i in items):
+        elif any(risk == RiskLevel.ELEVATED for risk in known_risks):
             d_risk = RiskLevel.ELEVATED
+        elif has_unknown_targets:
+            # A known nominal subset cannot certify a domain with missing inputs.
+            d_risk = RiskLevel.UNKNOWN
+        else:
+            d_risk = RiskLevel.NOMINAL
 
         domain_summaries.append(
             DomainPostureSummary(
@@ -371,28 +390,43 @@ async def build_universe_matrix(
             )
         )
 
-    # Compute overall posture
-    overall_posture = RiskLevel.NOMINAL
-    if any(r == RiskLevel.CRITICAL for r in all_risks):
+    # Missing forecasts and explicit non-answers remain unknown. Do not turn an
+    # empty risk set into a healthy-looking NOMINAL score of 100.
+    known_risks = [risk for risk in all_risks if risk != RiskLevel.UNKNOWN]
+    scored_target_count = len(known_risks)
+    unknown_target_count = max(0, len(UNIVERSE_TARGETS) - scored_target_count)
+    if any(risk == RiskLevel.CRITICAL for risk in known_risks):
         overall_posture = RiskLevel.CRITICAL
-    elif any(r == RiskLevel.HIGH for r in all_risks):
+    elif any(risk == RiskLevel.HIGH for risk in known_risks):
         overall_posture = RiskLevel.HIGH
-    elif any(r == RiskLevel.ELEVATED for r in all_risks):
+    elif any(risk == RiskLevel.ELEVATED for risk in known_risks):
         overall_posture = RiskLevel.ELEVATED
+    elif unknown_target_count:
+        # Only declare NOMINAL when every registered target has usable evidence.
+        overall_posture = RiskLevel.UNKNOWN
+    else:
+        overall_posture = RiskLevel.NOMINAL
+    critical_count = sum(1 for risk in known_risks if risk == RiskLevel.CRITICAL)
+    high_count = sum(1 for risk in known_risks if risk == RiskLevel.HIGH)
+    elevated_count = sum(1 for risk in known_risks if risk == RiskLevel.ELEVATED)
 
-    critical_count = sum(1 for r in all_risks if r == RiskLevel.CRITICAL)
-    high_count = sum(1 for r in all_risks if r == RiskLevel.HIGH)
-    elevated_count = sum(1 for r in all_risks if r == RiskLevel.ELEVATED)
-
-    health_score = max(
-        0.0, 100.0 - (critical_count * 25.0 + high_count * 10.0 + elevated_count * 3.0)
+    health_score = (
+        None
+        if unknown_target_count > 0
+        else max(
+            0.0,
+            100.0
+            - (critical_count * 25.0 + high_count * 10.0 + elevated_count * 3.0),
+        )
     )
 
     return UniverseMatrixResponse(
-        ecosystem_health_score=round(health_score, 1),
+        ecosystem_health_score=round(health_score, 1) if health_score is not None else None,
         overall_posture=overall_posture,
         total_domains=len(UniverseDomain),
         total_active_targets=len(UNIVERSE_TARGETS),
+        scored_target_count=scored_target_count,
+        unknown_target_count=unknown_target_count,
         domains=domain_summaries,
         timestamp=datetime.now(UTC),
     )

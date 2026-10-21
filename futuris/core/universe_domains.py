@@ -17,6 +17,9 @@ class UniverseDomain(StrEnum):
 
 
 class RiskLevel(StrEnum):
+    """Risk posture, with UNKNOWN reserved for missing/insufficient evidence."""
+
+    UNKNOWN = "UNKNOWN"
     NOMINAL = "NOMINAL"
     ELEVATED = "ELEVATED"
     HIGH = "HIGH"

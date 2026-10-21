@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchForecasts, fetchUniverseMatrix, refreshUniverseMatrix, triggerDemoSeed } from '../api/client';
-import { Forecast, ConfidenceLevel, UniverseMatrixResponse } from '../api/types';
+import { Forecast, ConfidenceLevel, RiskLevel, UniverseMatrixResponse } from '../api/types';
 import {
   HelpCircle,
   AlertCircle,
@@ -80,6 +80,34 @@ export const ForecastListPage: React.FC = () => {
   useEffect(() => {
     loadData();
   }, [filterStatus]);
+
+  const postureBadgeClass = (posture: RiskLevel): string => {
+    switch (posture) {
+      case 'NOMINAL':
+        return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
+      case 'ELEVATED':
+        return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+      case 'HIGH':
+      case 'CRITICAL':
+        return 'bg-rose-500/20 text-rose-300 border-rose-500/30';
+      case 'UNKNOWN':
+        return 'bg-slate-500/20 text-slate-300 border-slate-500/30';
+    }
+  };
+
+  const postureIconClass = (posture: RiskLevel): string => {
+    switch (posture) {
+      case 'NOMINAL':
+        return 'text-emerald-400';
+      case 'ELEVATED':
+        return 'text-amber-300';
+      case 'HIGH':
+      case 'CRITICAL':
+        return 'text-rose-300';
+      case 'UNKNOWN':
+        return 'text-slate-300';
+    }
+  };
 
   // Format dynamic prediction units
   const formatPrediction = (target: string, val: number): string => {
@@ -380,33 +408,47 @@ export const ForecastListPage: React.FC = () => {
         <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-xl p-5 shadow-sm border border-indigo-900 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center space-x-4">
             <div className="w-12 h-12 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center">
-              <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+              {matrix.overall_posture === 'NOMINAL' ? (
+                <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+              ) : (
+                <AlertCircle className={`w-6 h-6 ${postureIconClass(matrix.overall_posture)}`} />
+              )}
             </div>
             <div>
               <div className="flex items-center space-x-2">
                 <span className="text-xs font-semibold tracking-wider uppercase text-indigo-300">
                   Global Ecosystem Health Index
                 </span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase">
+                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border uppercase ${postureBadgeClass(matrix.overall_posture)}`}>
                   {matrix.overall_posture}
                 </span>
               </div>
-              <div className="text-2xl font-black tracking-tight">{matrix.ecosystem_health_score} / 100</div>
+              <div className="text-2xl font-black tracking-tight">
+                {matrix.ecosystem_health_score === null
+                  ? 'N/A — incomplete risk evidence'
+                  : `${matrix.ecosystem_health_score.toFixed(1)} / 100`}
+              </div>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-6 text-xs text-slate-300">
             <div>
-              <div className="text-slate-400 uppercase text-[10px] font-semibold">Subsystems Active</div>
-              <div className="text-sm font-bold text-white font-mono">{matrix.total_domains} / 9 Active</div>
+              <div className="text-slate-400 uppercase text-[10px] font-semibold">Domains Tracked</div>
+              <div className="text-sm font-bold text-white font-mono">{matrix.total_domains} / 9</div>
             </div>
             <div>
-              <div className="text-slate-400 uppercase text-[10px] font-semibold">Tracked Metrics</div>
-              <div className="text-sm font-bold text-white font-mono">{matrix.total_active_targets} Operational</div>
+              <div className="text-slate-400 uppercase text-[10px] font-semibold">Risk-scored Targets</div>
+              <div className="text-sm font-bold text-white font-mono">
+                {matrix.scored_target_count} / {matrix.total_active_targets}
+              </div>
             </div>
             <div>
-              <div className="text-slate-400 uppercase text-[10px] font-semibold">IntelX Grounding</div>
-              <div className="text-sm font-bold text-emerald-400 font-mono">ONLINE (Exogenous)</div>
+              <div className="text-slate-400 uppercase text-[10px] font-semibold">Unknown Targets</div>
+              <div className="text-sm font-bold text-slate-200 font-mono">{matrix.unknown_target_count}</div>
+            </div>
+            <div>
+              <div className="text-slate-400 uppercase text-[10px] font-semibold">IntelX Context</div>
+              <div className="text-sm font-bold text-slate-200 font-mono">Best-effort</div>
             </div>
             <div>
               <div className="text-slate-400 uppercase text-[10px] font-semibold">Last Swept</div>
