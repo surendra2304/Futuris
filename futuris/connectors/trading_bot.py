@@ -22,16 +22,28 @@ class TradingBotConnector(BaseConnector):
 
     def __init__(
         self,
-        base_url: str = "http://trading-bot.local",
+        base_url: str | None = None,
         api_key: str | None = None,
         timeout_seconds: float = 10.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or TRADING_BOT_DEFAULT_KEY
+        from futuris.infra.config import settings
+
+        resolved_url = (
+            base_url
+            or getattr(settings, "STRATEX_URL", None)
+            or "http://trading-bot.local"
+        )
+        self.base_url = resolved_url.rstrip("/")
+        self.api_key = (
+            api_key
+            or getattr(settings, "STRATEX_API_KEY", None)
+            or TRADING_BOT_DEFAULT_KEY
+        )
         self.timeout_seconds = timeout_seconds
         self.transport = transport
-        warn_if_default_credential("trading_bot", self.api_key, TRADING_BOT_DEFAULT_KEY, logger)
+        if self.api_key == TRADING_BOT_DEFAULT_KEY:
+            warn_if_default_credential("trading_bot", self.api_key, TRADING_BOT_DEFAULT_KEY, logger)
 
     async def fetch(self, start: datetime, end: datetime) -> list[Observation]:
         """Fetch trading observations across [start, end]."""
@@ -139,6 +151,87 @@ class TradingBotConnector(BaseConnector):
         logger.info("trading_fetch_completed", count=len(observations))
         return observations
 
+    async def fetch_ticker_series(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[Observation]:
+        """Fetch historical price and volatility observations for a specific market ticker.
+
+        Supports target assets like BTCUSDT, ETHUSDT, SOLUSDT from Stratex.
+        """
+        s_dt = start.replace(tzinfo=UTC) if start.tzinfo is None else start.astimezone(UTC)
+        e_dt = end.replace(tzinfo=UTC) if end.tzinfo is None else end.astimezone(UTC)
+        sym_clean = symbol.upper().replace("-", "").replace("/", "")
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "X-API-Key": self.api_key
+            if self.api_key != TRADING_BOT_DEFAULT_KEY
+            else TRADING_BOT_DEFAULT_READ_KEY,
+            "Accept": "application/json",
+        }
+        params = {
+            "symbol": sym_clean,
+            "start": s_dt.isoformat(),
+            "end": e_dt.isoformat(),
+        }
+
+        url = f"{self.base_url}/api/v1/telemetry/market/{sym_clean}"
+        data: list[dict[str, Any]] = []
+        try:
+            async with httpx.AsyncClient(
+                transport=self.transport, timeout=self.timeout_seconds
+            ) as client:
+                resp = await client.get(url, params=params, headers=headers)
+                if resp.status_code == 200:
+                    res_json = resp.json()
+                    data = res_json if isinstance(res_json, list) else res_json.get("data", [])
+                elif resp.status_code == 404:
+                    fallback_url = f"{self.base_url}/api/v1/telemetry/trading"
+                    resp2 = await client.get(fallback_url, params=params, headers=headers)
+                    if resp2.status_code == 200:
+                        res_json2 = resp2.json()
+                        data = (
+                            res_json2
+                            if isinstance(res_json2, list)
+                            else res_json2.get("data", [])
+                        )
+        except Exception as exc:
+            logger.warning(
+                "ticker_telemetry_unavailable",
+                symbol=sym_clean,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        observations: list[Observation] = []
+        for item in data:
+            raw_ts = item.get("timestamp") or item.get("observed_at")
+            if not raw_ts:
+                continue
+            raw_dt = datetime.fromisoformat(str(raw_ts))
+            obs_dt = raw_dt.replace(tzinfo=UTC) if raw_dt.tzinfo is None else raw_dt.astimezone(UTC)
+            val = float(item.get("value") or item.get("price") or 0.0)
+            m_type = item.get("metric_type", "price")
+            observations.append(
+                Observation(
+                    observed_at=obs_dt,
+                    source=f"stratex:{sym_clean}",
+                    series_id=f"trading:{sym_clean}:{m_type}",
+                    value=val,
+                    unit=item.get("unit", "USD"),
+                    tags={
+                        "signal_class": SignalClass.TELEMETRY.value,
+                        "symbol": sym_clean,
+                        **item.get("metadata", {}),
+                    },
+                )
+            )
+
+        logger.info("ticker_series_fetch_completed", symbol=sym_clean, count=len(observations))
+        return observations
+
 
 # Standard Trading Forecast Targets
 TARGET_VOLATILITY_SPIKE = "trading:btc:volatility_spike_24h"
@@ -146,3 +239,8 @@ TARGET_DRAWDOWN_RISK = "trading:portfolio:drawdown_exceedance_7d"
 TARGET_STRATEGY_DEGRADATION = "trading:strategy:winrate_degradation_14d"
 TARGET_CAPITAL_UTILIZATION = "trading:portfolio:capital_utilization_24h"
 TARGET_REGIME_TRANSITION = "trading:market:regime_transition_24h"
+
+# Primary Market Target Series
+TARGET_BTC_PRICE_VARIANCE = "trading:BTCUSDT:price_variance_24h"
+TARGET_ETH_PRICE_VARIANCE = "trading:ETHUSDT:price_variance_24h"
+TARGET_SOL_PRICE_VARIANCE = "trading:SOLUSDT:price_variance_24h"
