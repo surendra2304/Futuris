@@ -36,6 +36,7 @@ from futuris.api.routers.models import router as models_router
 from futuris.api.routers.predictions import router as predictions_router
 from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.api.routers.self_status import router as self_status_router
+from futuris.api.routers.streaming import router as streaming_router
 from futuris.api.routers.webhooks import router as webhooks_router
 from futuris.demo.seed import DemoSeeder
 from futuris.demo.startup_policy import should_seed_demo_on_startup
@@ -296,6 +297,7 @@ app.include_router(market_router, prefix="/api/v1/futuris", include_in_schema=Fa
 app.include_router(market_router, prefix="/v1/market", include_in_schema=False)
 app.include_router(predictions_router)
 app.include_router(self_status_router)
+app.include_router(streaming_router)
 app.include_router(webhooks_router, prefix="/v1")
 app.include_router(webhooks_router, prefix="/api/v1", include_in_schema=False)
 
