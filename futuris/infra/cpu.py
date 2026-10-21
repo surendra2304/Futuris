@@ -22,11 +22,11 @@ import os
 import threading
 import time
 import weakref
+from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from functools import partial
 from multiprocessing import get_context
-from collections.abc import Callable
 from typing import Any, TypeVar
 
 from futuris.infra.logging import get_logger
