@@ -71,8 +71,9 @@ async def test_process_computation_does_not_starve_event_loop():
 
 @pytest.mark.asyncio
 async def test_broken_pool_on_submit_is_discarded(monkeypatch: pytest.MonkeyPatch):
-    import futuris.infra.cpu as cpu_module
     from concurrent.futures.process import BrokenProcessPool
+
+    import futuris.infra.cpu as cpu_module
 
     class AlreadyBrokenPool:
         shutdown_called = False
