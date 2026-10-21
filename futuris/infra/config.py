@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
@@ -224,12 +225,25 @@ class Settings(BaseSettings):
 
     @property
     def postgres_async_url(self) -> str:
-        """Construct standard production PostgreSQL asyncpg connection URL."""
-        pw = self.POSTGRES_PASSWORD or "jK8qbCVzXpbP54t0yAvk-1KX"
-        return (
-            f"postgresql+asyncpg://{self.POSTGRES_USER}:{pw}"
-            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-        )
+        """Build a PostgreSQL URL only when an explicit password is configured.
+
+        SQLAlchemy's URL builder handles URL-encoding credentials, preventing
+        characters such as @, :, /, and # from changing the parsed authority.
+        There is deliberately no fallback credential.
+        """
+        password = self.POSTGRES_PASSWORD
+        if password is None or not password.strip():
+            raise RuntimeError(
+                "POSTGRES_PASSWORD must be configured before constructing a PostgreSQL URL"
+            )
+        return URL.create(
+            drivername="postgresql+asyncpg",
+            username=self.POSTGRES_USER,
+            password=password,
+            host=self.POSTGRES_HOST,
+            port=self.POSTGRES_PORT,
+            database=self.POSTGRES_DB,
+        ).render_as_string(hide_password=False)
 
     def validate_production_safety(self) -> None:
         """Enforce safe_config checks if running under production environment."""
