@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from futuris.api.deps import get_db_session
-from futuris.core.enums import EvidenceClass, ForecastStatus
+from futuris.core.enums import ConfidenceLevel, EvidenceClass, ForecastStatus
 from futuris.core.schemas import Forecast
 from futuris.core.universe_domains import (
     UNIVERSE_TARGETS,
@@ -92,10 +92,10 @@ class UniversePredictionResponse(BaseModel):
     target: str
     target_name: str
     domain: UniverseDomain
-    point_prediction: float
+    point_prediction: float | None
     unit: str
-    range_lower: float
-    range_upper: float
+    range_lower: float | None
+    range_upper: float | None
     probability: float | None
     confidence: str
     risk_level: RiskLevel
@@ -115,18 +115,18 @@ class TargetPostureItem(BaseModel):
     target: str
     name: str
     domain: UniverseDomain
-    point_prediction: float
+    point_prediction: float | None
     unit: str
-    range_lower: float
-    range_upper: float
+    range_lower: float | None
+    range_upper: float | None
     probability: float | None
     confidence: str
     risk_level: RiskLevel
     mitigation_action: str
     interpretation: str
-    last_updated: datetime
+    last_updated: datetime | None
     status: ForecastStatus
-    evidence_class: EvidenceClass
+    evidence_class: EvidenceClass | None = None
     evidence_source: str | None = None
 
 
@@ -135,16 +135,46 @@ class DomainPostureSummary(BaseModel):
     display_name: str
     risk_level: RiskLevel
     target_count: int
+    scored_target_count: int
+    unknown_target_count: int
     targets: list[TargetPostureItem]
 
 
 class UniverseMatrixResponse(BaseModel):
-    ecosystem_health_score: float
+    ecosystem_health_score: float | None
     overall_posture: RiskLevel
     total_domains: int
     total_active_targets: int
+    scored_target_count: int
+    unknown_target_count: int
+    coverage_pct: float | None
     domains: list[DomainPostureSummary]
     timestamp: datetime
+
+
+def _forecast_is_scorable(forecast: Forecast) -> bool:
+    """Only an active forecast with usable model confidence can drive a risk label."""
+    return (
+        forecast.status == ForecastStatus.ACTIVE
+        and forecast.confidence != ConfidenceLevel.INSUFFICIENT_DATA
+    )
+
+
+def _forecast_risk_level(spec: DomainTargetSpec, forecast: Forecast) -> RiskLevel:
+    """Keep missing, blocked, and insufficient forecasts distinct from nominal risk."""
+    if not _forecast_is_scorable(forecast):
+        return RiskLevel.UNKNOWN
+    return evaluate_risk_level(spec, forecast.prediction, forecast.probability)
+
+
+def _aggregate_risk_level(risks: list[RiskLevel], *, has_unknown: bool) -> RiskLevel:
+    """Worst observed risk wins; NOMINAL requires complete coverage of the scope."""
+    for candidate in (RiskLevel.CRITICAL, RiskLevel.HIGH, RiskLevel.ELEVATED):
+        if candidate in risks:
+            return candidate
+    if has_unknown or not risks:
+        return RiskLevel.UNKNOWN
+    return RiskLevel.NOMINAL
 
 
 def _display_probability_percent(spec: DomainTargetSpec, forecast: Forecast) -> float:
@@ -199,11 +229,16 @@ async def request_universe_prediction(
         },
     )
 
-    risk = evaluate_risk_level(spec, fc.prediction, fc.probability)
-    interp = spec.interpretation_template.format(
-        prediction=fc.prediction,
-        probability=_display_probability_percent(spec, fc),
-        unit=spec.unit,
+    scorable = _forecast_is_scorable(fc)
+    risk = _forecast_risk_level(spec, fc)
+    interp = (
+        spec.interpretation_template.format(
+            prediction=fc.prediction,
+            probability=_display_probability_percent(spec, fc),
+            unit=spec.unit,
+        )
+        if scorable
+        else "No scored estimate is available; risk remains UNKNOWN until forecast evidence is available."
     )
 
     intelx_included = any(d.name.startswith("intelx:") for d in fc.drivers)
@@ -213,10 +248,10 @@ async def request_universe_prediction(
         target=fc.target,
         target_name=spec.name,
         domain=spec.domain,
-        point_prediction=fc.prediction,
+        point_prediction=fc.prediction if scorable else None,
         unit=spec.unit,
-        range_lower=fc.range_lower,
-        range_upper=fc.range_upper,
+        range_lower=fc.range_lower if scorable else None,
+        range_upper=fc.range_upper if scorable else None,
         probability=fc.probability,
         confidence=fc.confidence.value.upper(),
         risk_level=risk,
@@ -301,20 +336,61 @@ async def build_universe_matrix(
             payload={"targets": backfilled, "generated": generated},
         )
 
-    # Group by domain
+    # Return every registered target, including targets with no stored forecast.
+    # Missing/blocked/insufficient forecasts become UNKNOWN with null estimates,
+    # never a fabricated zero estimate classified as NOMINAL.
     domain_map: dict[UniverseDomain, list[TargetPostureItem]] = {d: [] for d in UniverseDomain}
+    risks_by_domain: dict[UniverseDomain, list[RiskLevel]] = {d: [] for d in UniverseDomain}
+    unknown_by_domain: dict[UniverseDomain, int] = {d: 0 for d in UniverseDomain}
     all_risks: list[RiskLevel] = []
+    scored_target_count = 0
+    unknown_target_count = 0
 
     for target, spec in UNIVERSE_TARGETS.items():
         fc = latest_by_target.get(target)
-        if not fc:
+        if fc is None:
+            unknown_target_count += 1
+            unknown_by_domain[spec.domain] += 1
+            domain_map[spec.domain].append(
+                TargetPostureItem(
+                    target=spec.target,
+                    name=spec.name,
+                    domain=spec.domain,
+                    point_prediction=None,
+                    unit=spec.unit,
+                    range_lower=None,
+                    range_upper=None,
+                    probability=None,
+                    confidence=ConfidenceLevel.INSUFFICIENT_DATA.value.upper(),
+                    risk_level=RiskLevel.UNKNOWN,
+                    mitigation_action=spec.mitigation_action,
+                    interpretation="No forecast is available for this target; risk is unknown.",
+                    last_updated=None,
+                    status=ForecastStatus.INSUFFICIENT_DATA,
+                    evidence_class=None,
+                    evidence_source=None,
+                )
+            )
             continue
-        risk = evaluate_risk_level(spec, fc.prediction, fc.probability)
-        all_risks.append(risk)
-        interp = spec.interpretation_template.format(
-            prediction=fc.prediction,
-            probability=_display_probability_percent(spec, fc),
-            unit=spec.unit,
+
+        risk = _forecast_risk_level(spec, fc)
+        scorable = risk != RiskLevel.UNKNOWN
+        if scorable:
+            scored_target_count += 1
+            all_risks.append(risk)
+            risks_by_domain[spec.domain].append(risk)
+        else:
+            unknown_target_count += 1
+            unknown_by_domain[spec.domain] += 1
+
+        interp = (
+            spec.interpretation_template.format(
+                prediction=fc.prediction,
+                probability=_display_probability_percent(spec, fc),
+                unit=spec.unit,
+            )
+            if scorable
+            else f"No scored estimate is available ({fc.status.value}); risk is unknown."
         )
 
         domain_map[spec.domain].append(
@@ -322,11 +398,11 @@ async def build_universe_matrix(
                 target=spec.target,
                 name=spec.name,
                 domain=spec.domain,
-                point_prediction=fc.prediction,
+                point_prediction=fc.prediction if scorable else None,
                 unit=spec.unit,
-                range_lower=fc.range_lower,
-                range_upper=fc.range_upper,
-                probability=fc.probability,
+                range_lower=fc.range_lower if scorable else None,
+                range_upper=fc.range_upper if scorable else None,
+                probability=fc.probability if scorable else None,
                 confidence=fc.confidence.value.upper(),
                 risk_level=risk,
                 mitigation_action=spec.mitigation_action,
@@ -353,13 +429,12 @@ async def build_universe_matrix(
 
     for d in UniverseDomain:
         items = domain_map[d]
-        d_risk = RiskLevel.NOMINAL
-        if any(i.risk_level == RiskLevel.CRITICAL for i in items):
-            d_risk = RiskLevel.CRITICAL
-        elif any(i.risk_level == RiskLevel.HIGH for i in items):
-            d_risk = RiskLevel.HIGH
-        elif any(i.risk_level == RiskLevel.ELEVATED for i in items):
-            d_risk = RiskLevel.ELEVATED
+        known_risks = risks_by_domain[d]
+        domain_unknown_count = unknown_by_domain[d]
+        d_risk = _aggregate_risk_level(
+            known_risks,
+            has_unknown=domain_unknown_count > 0,
+        )
 
         domain_summaries.append(
             DomainPostureSummary(
@@ -367,32 +442,42 @@ async def build_universe_matrix(
                 display_name=display_names.get(d, d.value.title()),
                 risk_level=d_risk,
                 target_count=len(items),
+                scored_target_count=len(known_risks),
+                unknown_target_count=domain_unknown_count,
                 targets=items,
             )
         )
 
-    # Compute overall posture
-    overall_posture = RiskLevel.NOMINAL
-    if any(r == RiskLevel.CRITICAL for r in all_risks):
-        overall_posture = RiskLevel.CRITICAL
-    elif any(r == RiskLevel.HIGH for r in all_risks):
-        overall_posture = RiskLevel.HIGH
-    elif any(r == RiskLevel.ELEVATED for r in all_risks):
-        overall_posture = RiskLevel.ELEVATED
+    # NOMINAL requires full coverage. A known serious risk still wins over unknown
+    # coverage so alerts are not hidden by another target lacking a data source.
+    overall_posture = _aggregate_risk_level(
+        all_risks,
+        has_unknown=unknown_target_count > 0,
+    )
 
     critical_count = sum(1 for r in all_risks if r == RiskLevel.CRITICAL)
     high_count = sum(1 for r in all_risks if r == RiskLevel.HIGH)
     elevated_count = sum(1 for r in all_risks if r == RiskLevel.ELEVATED)
-
     health_score = max(
         0.0, 100.0 - (critical_count * 25.0 + high_count * 10.0 + elevated_count * 3.0)
     )
+    coverage_pct = (
+        round(scored_target_count / len(UNIVERSE_TARGETS) * 100.0, 1)
+        if UNIVERSE_TARGETS
+        else None
+    )
+    reported_health_score = (
+        round(health_score, 1) if unknown_target_count == 0 and UNIVERSE_TARGETS else None
+    )
 
     return UniverseMatrixResponse(
-        ecosystem_health_score=round(health_score, 1),
+        ecosystem_health_score=reported_health_score,
         overall_posture=overall_posture,
         total_domains=len(UniverseDomain),
         total_active_targets=len(UNIVERSE_TARGETS),
+        scored_target_count=scored_target_count,
+        unknown_target_count=unknown_target_count,
+        coverage_pct=coverage_pct,
         domains=domain_summaries,
         timestamp=datetime.now(UTC),
     )

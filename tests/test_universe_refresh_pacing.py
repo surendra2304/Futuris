@@ -207,3 +207,81 @@ from futuris.core.universe_forecasting import (  # noqa: E402
     refresh_all_within_budget,
     refresh_missing_within_budget,
 )
+
+
+@pytest.mark.asyncio
+async def test_empty_matrix_reports_unknown_not_nominal(monkeypatch):
+    import futuris.api.routers.predictions as predictions
+
+    monkeypatch.setattr(predictions, "ForecastRepository", _EmptyRepo)
+    response = await build_universe_matrix(session=object(), budget_seconds=0.0)
+
+    assert response.overall_posture.value == "UNKNOWN"
+    assert response.ecosystem_health_score is None
+    assert response.scored_target_count == 0
+    assert response.unknown_target_count == response.total_active_targets
+    assert response.coverage_pct == 0.0
+    assert all(domain.risk_level.value == "UNKNOWN" for domain in response.domains)
+    assert all(
+        target.point_prediction is None
+        and target.range_lower is None
+        and target.range_upper is None
+        and target.risk_level.value == "UNKNOWN"
+        for domain in response.domains
+        for target in domain.targets
+    )
+
+
+@pytest.mark.asyncio
+async def test_nominal_partial_coverage_remains_unknown_until_all_targets_are_scored(
+    monkeypatch,
+):
+    import futuris.api.routers.predictions as predictions
+
+    target = next(iter(UNIVERSE_TARGETS))
+    now = datetime.now(UTC)
+    healthy = _forecast(target, now)
+    healthy.prediction = 90.0
+    healthy.range_lower = 80.0
+    healthy.range_upper = 100.0
+    healthy.probability = None
+
+    class _OneHealthyForecastRepo(_EmptyRepo):
+        async def list_by_statuses(self, statuses):
+            return [healthy]
+
+    monkeypatch.setattr(predictions, "ForecastRepository", _OneHealthyForecastRepo)
+    response = await build_universe_matrix(session=object(), budget_seconds=0.0)
+
+    assert response.scored_target_count == 1
+    assert response.unknown_target_count == response.total_active_targets - 1
+    assert response.overall_posture.value == "UNKNOWN"
+    assert response.ecosystem_health_score is None
+    first = next(d for d in response.domains if d.targets[0].target == target)
+    assert first.targets[0].risk_level.value == "NOMINAL"
+    assert first.risk_level.value == "UNKNOWN"
+
+
+@pytest.mark.asyncio
+async def test_observed_critical_risk_is_not_hidden_by_unknown_targets(monkeypatch):
+    import futuris.api.routers.predictions as predictions
+
+    target = next(iter(UNIVERSE_TARGETS))
+    now = datetime.now(UTC)
+    critical = _forecast(target, now)
+    critical.prediction = 10.0
+    critical.range_lower = 8.0
+    critical.range_upper = 12.0
+    critical.probability = None
+
+    class _OneCriticalForecastRepo(_EmptyRepo):
+        async def list_by_statuses(self, statuses):
+            return [critical]
+
+    monkeypatch.setattr(predictions, "ForecastRepository", _OneCriticalForecastRepo)
+    response = await build_universe_matrix(session=object(), budget_seconds=0.0)
+
+    assert response.scored_target_count == 1
+    assert response.unknown_target_count == response.total_active_targets - 1
+    assert response.overall_posture.value == "CRITICAL"
+    assert response.ecosystem_health_score is None

@@ -73,10 +73,11 @@ from measured facts, [HYPOTHESIS] not yet tested. Evidence logs from this pass a
 - **B25 (fixed) — permissive default lookup.** `get_target_spec` defaulted to `strict=False`; the only production
   caller that used the default was `generate_universe_forecast`. Fixed by strict resolution there.
 - **B26 (fixed) — OpenAPI duplicates.** Alias mounts and GET+HEAD pairs produced duplicate operations in the schema.
-- **B27 (open, medium — honesty) — an empty matrix reports `overall_posture: NOMINAL`.** With no active targets,
-  `build_universe_matrix` leaves the default `RiskLevel.NOMINAL` (`futuris/api/routers/predictions.py`).
-  `RiskLevel` has no unknown member; fixing this changes the API contract and the UI type, so it is recorded
-  rather than changed.
+- **B27 (fixed in PR #27, pending CI) — unknown matrix posture.** Previously an empty or partially scored matrix
+  defaulted to NOMINAL, and insufficient-data placeholder zeros could be threshold-classified as low risk.
+  The revised API adds UNKNOWN, nulls unscored estimates, reports scored/unknown counts and coverage, and
+  only emits an aggregate health score when every registered target is scorable. The UI renders missing coverage
+  neutrally instead of green. Merge remains gated on the PR-head pytest, lint and Docker checks.
 - **B28 (open, low — debt) — four unreferenced modules.** `futuris/upgrade/{cancellation,outbox,observability,agent_runtime}.py`
   have no importers in `futuris/`, `scripts/` or `tests/`, and 0 % coverage (144 statements; V41, V50). Recorded as
   dead-code candidates; not deleted.

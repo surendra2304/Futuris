@@ -95,3 +95,24 @@ async def test_universal_prediction_request_memora():
         assert data["domain"] == "memora"
         assert data["unit"] == "days"
         assert data["point_prediction"] == 45.0
+
+
+@pytest.mark.asyncio
+async def test_prediction_with_insufficient_data_reports_unknown_and_null_estimates():
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+    ):
+        resp = await client.post(
+            "/v1/predictions/predict",
+            json={"target": "sentinel:ratelimit:api_saturation_risk_24h", "context": {}},
+            headers=ANALYST_HEADERS,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "insufficient_data"
+        assert data["risk_level"] == "UNKNOWN"
+        assert data["point_prediction"] is None
+        assert data["range_lower"] is None
+        assert data["range_upper"] is None
+        assert "risk remains UNKNOWN" in data["interpretation"]

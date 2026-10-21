@@ -17,6 +17,7 @@ class UniverseDomain(StrEnum):
 
 
 class RiskLevel(StrEnum):
+    UNKNOWN = "UNKNOWN"
     NOMINAL = "NOMINAL"
     ELEVATED = "ELEVATED"
     HIGH = "HIGH"
