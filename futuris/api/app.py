@@ -34,6 +34,8 @@ from futuris.api.routers.friday import router as friday_router
 from futuris.api.routers.market import router as market_router
 from futuris.api.routers.models import router as models_router
 from futuris.api.routers.predictions import router as predictions_router
+from futuris.api.routers.risk import router as risk_router
+from futuris.api.routers.scenarios import fan_chart_router
 from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.api.routers.self_status import router as self_status_router
 from futuris.api.routers.streaming import router as streaming_router
@@ -285,6 +287,8 @@ register_error_handlers(app)
 # is an alias of the same handler, /v1/webhooks paths live under /v1.
 app.include_router(forecasts_router)
 app.include_router(scenarios_router)
+app.include_router(fan_chart_router)
+app.include_router(risk_router)
 app.include_router(evaluation_router)
 app.include_router(events_router)
 app.include_router(models_router)

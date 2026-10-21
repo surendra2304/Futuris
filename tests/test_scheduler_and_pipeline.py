@@ -138,6 +138,8 @@ async def test_modular_pipeline_stage_composition():
 async def test_scheduler_jobs_direct_trigger():
     """Verify scheduler job functions can be triggered directly without real-time sleep loops."""
     scheduler = ForecastScheduler()
+    # Scope to single target for fast direct-trigger test execution
+    scheduler.subscriptions = scheduler.subscriptions[:1]
 
     # 1. Trigger Ingestion Job
     points = await scheduler.ingest_job()

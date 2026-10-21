@@ -310,6 +310,87 @@ curl -s "http://localhost:8000/trends?limit=5"
 
 ---
 
+### 7. Quantitative Tail-Risk & Calibration Audit (`/v1/risk/audit/{target}`)
+Computes Value at Risk (VaR 95%, 99%), Expected Shortfall (CVaR), Kupiec POF Likelihood Ratio tests, Christoffersen independence tests, and Basel traffic light classification. Automatically streams live updates over the pub/sub event hub.
+
+- **Method**: `GET`
+- **Path**: `/v1/risk/audit/{target}`
+- **Query Parameters**: `window_days` (default: 30), `confidence_level` (default: 0.95)
+
+**cURL Example**:
+```bash
+curl -s "http://localhost:8000/v1/risk/audit/BTCUSDT?window_days=30"
+```
+
+**Response Payload (HTTP 200 OK)**:
+```json
+{
+  "target": "BTCUSDT",
+  "sample_size": 150,
+  "lookback_window_days": 30,
+  "confidence_level": 0.95,
+  "basel_traffic_light": "green",
+  "metrics_95": {
+    "confidence_level": 0.95,
+    "var_historical": 0.0385,
+    "var_parametric": 0.0412,
+    "cvar_expected_shortfall": 0.0521,
+    "breach_count": 7,
+    "breach_rate": 0.0467
+  },
+  "metrics_99": {
+    "confidence_level": 0.99,
+    "var_historical": 0.0624,
+    "cvar_expected_shortfall": 0.0789,
+    "breach_count": 1
+  },
+  "kupiec_test_95": {
+    "test_name": "Kupiec POF (95%)",
+    "statistic": 0.071,
+    "p_value": 0.789,
+    "is_rejected": false
+  },
+  "christoffersen_independence_test": {
+    "test_name": "Christoffersen Independence Test",
+    "statistic": 0.42,
+    "p_value": 0.516,
+    "is_rejected": false
+  },
+  "prediction_is_not_authorization": true
+}
+```
+
+---
+
+### 8. Monte Carlo Quantile Fan-Charts (`/v1/scenarios/monte-carlo/fan-chart`)
+Generates multi-step stochastic trajectories with Cholesky correlation and antithetic variates, rendering discrete quantile fan-chart slices ($p05 \dots p99$).
+
+- **Method**: `POST`
+- **Path**: `/v1/scenarios/monte-carlo/fan-chart`
+
+**Request Payload**:
+```json
+{
+  "target": "BTCUSDT",
+  "base_value": 65000.0,
+  "horizon_steps": 12,
+  "num_samples": 1000,
+  "drift": 0.001,
+  "volatility": 0.03,
+  "use_antithetic_variates": true
+}
+```
+
+---
+
+### 9. Real-Time Streaming (SSE & WebSocket)
+- **SSE Stream**: `GET /v1/streaming/events` (supports target filter `?target=BTCUSDT`)
+- **WebSocket**: `ws://localhost:8000/v1/ws/forecasts` (interactive pub/sub with `{"action": "subscribe", "target": "BTCUSDT"}`)
+- Broadcasts real-time events: `forecast_created`, `forecast_updated`, `risk_calibration_update`, and `fan_chart_simulation`.
+
+
+---
+
 ## ⚙️ Environment Variables Specification
 
 All configuration parameters can be configured through environment variables or a `.env` file:

@@ -76,7 +76,14 @@ class ForecastScheduler:
         self.drift_monitor = DriftMonitor(event_repo=event_repo)
         self.safe_scheduler = SafeScheduler(lease_table)
         self.subscriptions: list[ForecastSubscription] = [
-            ForecastSubscription(target="service:checkout:capacity_exceedance_24h")
+            ForecastSubscription(target="service:checkout:capacity_exceedance_24h"),
+            ForecastSubscription(target="trading:BTCUSDT:price_variance_24h"),
+            ForecastSubscription(target="trading:ETHUSDT:price_variance_24h"),
+            ForecastSubscription(target="trading:SOLUSDT:price_variance_24h"),
+            ForecastSubscription(target="macro:SPY:return_exceedance_24h"),
+            ForecastSubscription(target="macro:DGS10:yield_shift_30d"),
+            ForecastSubscription(target="macro:T10Y2Y:curve_inversion_30d"),
+            ForecastSubscription(target="macro:UNRATE:unemployment_drift_90d"),
         ]
         self._in_flight_tasks: set[asyncio.Task] = set()
         self._mae_history: dict[str, list[float]] = {}
@@ -156,6 +163,30 @@ class ForecastScheduler:
                     if self.event_repo:
                         await self.event_repo.append(event)
                     await self.emitter.emit(event)
+
+            # High-conviction or significant forecast broadcast to FRIDAY mesh
+            if new_f.probability and new_f.probability >= 0.70:
+                try:
+                    from futuris.ecosystem.signals import signal_dispatcher
+
+                    t = asyncio.create_task(
+                        signal_dispatcher.notify_friday_forecast(
+                            {
+                                "forecast_id": str(new_f.forecast_id),
+                                "target": new_f.target,
+                                "prediction": round(float(new_f.prediction), 4),
+                                "probability": round(float(new_f.probability), 4),
+                                "range_lower": round(float(new_f.range_lower), 4),
+                                "range_upper": round(float(new_f.range_upper), 4),
+                                "model_version": new_f.model_version,
+                                "status": new_f.status.value,
+                            }
+                        )
+                    )
+                    self._in_flight_tasks.add(t)
+                    t.add_done_callback(self._in_flight_tasks.discard)
+                except Exception as exc:
+                    logger.debug("friday_forecast_dispatch_skipped", error=str(exc))
 
         return refreshed
 
@@ -281,6 +312,25 @@ class ForecastScheduler:
                         ece=ece,
                         expansion_factor=metrics["interval_expansion_factor"],
                     )
+                    try:
+                        from futuris.ecosystem.signals import signal_dispatcher
+
+                        t_risk = asyncio.create_task(
+                            signal_dispatcher.notify_stratex_risk_regime(
+                                target="calibration:brier_overconfidence",
+                                risk_report={
+                                    "brier_score": brier,
+                                    "ece": ece,
+                                    "interval_expansion_factor": expansion,
+                                    "basel_traffic_light": "yellow" if brier < 0.35 else "red",
+                                    "timestamp": now.isoformat(),
+                                },
+                            )
+                        )
+                        self._in_flight_tasks.add(t_risk)
+                        t_risk.add_done_callback(self._in_flight_tasks.discard)
+                    except Exception as exc:
+                        logger.debug("stratex_risk_dispatch_skipped", error=str(exc))
                 else:
                     metrics["overconfidence_penalized"] = False
                     metrics["interval_expansion_factor"] = 1.0

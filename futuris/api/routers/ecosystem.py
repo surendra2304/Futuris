@@ -162,3 +162,49 @@ async def seed_workspace(
         started_at=datetime.now(UTC),
         completed_runs=seed_guard.completed_runs,
     )
+
+
+class SignalBroadcastRequest(BaseModel):
+    destination: str = "all"  # "FRIDAY", "Stratex", or "all"
+    target: str = "trading:BTCUSDT:price_variance_24h"
+    payload: dict[str, Any]
+
+
+class SignalBroadcastResponse(BaseModel):
+    status: str
+    delivered: dict[str, bool]
+    timestamp: datetime
+
+
+@router.post(
+    "/signals/broadcast",
+    response_model=SignalBroadcastResponse,
+    summary="Push Calibrated Predictive Signals to Mesh Peers",
+)
+async def broadcast_mesh_signal(
+    req: SignalBroadcastRequest,
+    user: RequireAdmin,
+) -> SignalBroadcastResponse:
+    _ = user
+    from futuris.ecosystem.signals import signal_dispatcher
+
+    delivered: dict[str, bool] = {}
+    dest_lower = req.destination.lower()
+
+    if dest_lower in {"friday", "all"}:
+        ok_friday = await signal_dispatcher.notify_friday_forecast(req.payload)
+        delivered["FRIDAY"] = ok_friday
+
+    if dest_lower in {"stratex", "all"}:
+        ok_stratex = await signal_dispatcher.notify_stratex_risk_regime(
+            target=req.target, risk_report=req.payload
+        )
+        delivered["Stratex"] = ok_stratex
+
+    overall = "ok" if any(delivered.values()) else "degraded"
+    return SignalBroadcastResponse(
+        status=overall,
+        delivered=delivered,
+        timestamp=datetime.now(UTC),
+    )
+
