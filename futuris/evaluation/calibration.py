@@ -1,0 +1,190 @@
+"""Calibration analysis: binned reliability, hierarchical shrinkage, and conformal intervals."""
+
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+
+
+@dataclass
+class ReliabilityCurve:
+    """Binned reliability diagram data."""
+
+    bin_centers: list[float]
+    observed_frequencies: list[float]
+    bin_counts: list[int]
+    calibration_error: float = 0.0
+
+    @property
+    def expected_calibration_error(self) -> float:
+        return self.calibration_error
+
+
+class CalibrationAnalyzer:
+    """Evaluates probability calibration and applies small-sample hierarchical shrinkage."""
+
+    def __init__(self, shrinkage_k: float = 20.0, num_bins: int = 10) -> None:
+        self.shrinkage_k = shrinkage_k
+        self.num_bins = num_bins
+
+    def compute_reliability_curve(
+        self,
+        predicted_probs: list[float],
+        actual_outcomes: list[bool],
+    ) -> ReliabilityCurve:
+        """Compute binned empirical reliability curve."""
+        y_prob = np.asarray(predicted_probs, dtype=float)
+        y_true = np.asarray(actual_outcomes, dtype=float)
+
+        if len(y_prob) == 0:
+            return ReliabilityCurve([], [], [])
+
+        bins = np.linspace(0.0, 1.0, self.num_bins + 1)
+        centers: list[float] = []
+        observed_freqs: list[float] = []
+        counts: list[int] = []
+
+        for i in range(self.num_bins):
+            bin_lower, bin_upper = bins[i], bins[i + 1]
+            mask = (
+                (y_prob >= bin_lower) & (y_prob < bin_upper)
+                if i < self.num_bins - 1
+                else (y_prob >= bin_lower) & (y_prob <= bin_upper)
+            )
+            count = int(np.sum(mask))
+            center = float(0.5 * (bin_lower + bin_upper))
+            obs_freq = float(np.mean(y_true[mask])) if count > 0 else 0.0
+
+            centers.append(center)
+            observed_freqs.append(round(obs_freq, 4))
+            counts.append(count)
+
+        total_samples = sum(counts)
+        if total_samples > 0:
+            ece = sum(
+                (c / total_samples) * abs(f - center)
+                for c, f, center in zip(counts, observed_freqs, centers, strict=False)
+            )
+        else:
+            ece = 0.0
+
+        return ReliabilityCurve(
+            bin_centers=centers,
+            observed_frequencies=observed_freqs,
+            bin_counts=counts,
+            calibration_error=round(float(ece), 4),
+        )
+
+    def compute_calibration_curve(
+        self,
+        predicted_probs: list[float],
+        actual_outcomes: list[bool] | list[int],
+    ) -> list[tuple[float, float, int]]:
+        curve = self.compute_reliability_curve(predicted_probs, [bool(a) for a in actual_outcomes])
+        return list(
+            zip(curve.bin_centers, curve.observed_frequencies, curve.bin_counts, strict=False)
+        )
+
+    def compute_brier_score(
+        self,
+        predicted_probs: list[float],
+        actual_outcomes: list[bool] | list[int],
+    ) -> float:
+        y_prob = np.asarray(predicted_probs, dtype=float)
+        y_true = np.asarray(actual_outcomes, dtype=float)
+        if len(y_prob) == 0:
+            return 0.0
+        return float(np.mean((y_prob - y_true) ** 2))
+
+    def compute_expected_calibration_error(
+        self,
+        predicted_probs: list[float],
+        actual_outcomes: list[bool] | list[int],
+    ) -> float:
+        curve = self.compute_reliability_curve(predicted_probs, [bool(a) for a in actual_outcomes])
+        return curve.expected_calibration_error
+
+    def update_calibration_metrics(
+        self,
+        predicted_probs: list[float],
+        actual_outcomes: list[bool] | list[int],
+    ) -> dict[str, Any]:
+        """Compute full suite of calibration metrics from paired predictions and outcomes."""
+        bool_outcomes = [bool(a) for a in actual_outcomes]
+        if not predicted_probs or not actual_outcomes:
+            # No paired samples: there is nothing measured to report. Returning
+            # zeros with is_calibrated=True would claim a calibration result
+            # that was never computed.
+            return {
+                "n_resolved_outcomes": 0,
+                "calibration_status": "uncalibrated",
+                "detail": "no paired predictions and outcomes were supplied",
+            }
+        ece = self.compute_expected_calibration_error(predicted_probs, bool_outcomes)
+        brier = self.compute_brier_score(predicted_probs, bool_outcomes)
+        curve = self.compute_reliability_curve(predicted_probs, bool_outcomes)
+        return {
+            "ece": round(ece, 4),
+            "ece_score": round(ece, 4),
+            "brier_score": round(brier, 4),
+            "is_calibrated": ece < 0.15,
+            "n_resolved_outcomes": len(predicted_probs),
+            "calibration_status": "measured",
+            "sample_count": len(predicted_probs),
+            "reliability_curve": {
+                "bin_centers": curve.bin_centers,
+                "observed_frequencies": curve.observed_frequencies,
+                "bin_counts": curve.bin_counts,
+            },
+        }
+
+    def apply_hierarchical_shrinkage(
+        self,
+        n_target: int,
+        target_observed_rate: float,
+        pooled_observed_rate: float,
+        k: float | None = None,
+    ) -> float:
+        """Shrink target-level empirical rate toward the global pooled prior.
+
+        Formula: target_estimate = (n_target * target_rate + k * pooled_rate) / (n_target + k)
+        """
+        shrink_k = k if k is not None else self.shrinkage_k
+        if n_target + shrink_k == 0:
+            return pooled_observed_rate
+
+        shrunk = (n_target * target_observed_rate + shrink_k * pooled_observed_rate) / (
+            n_target + shrink_k
+        )
+        return float(np.clip(shrunk, 0.0, 1.0))
+
+    def apply_conformal_interval_scaling(
+        self,
+        nominal_lower: float,
+        nominal_upper: float,
+        prediction: float,
+        backtest_residuals: list[float],
+        desired_coverage: float = 0.90,
+    ) -> tuple[float, float]:
+        """Conformally adjust interval width using empirical residual quantiles."""
+        if not backtest_residuals:
+            return nominal_lower, nominal_upper
+
+        abs_res = np.abs(np.asarray(backtest_residuals, dtype=float))
+        # Find empirical quantile for desired coverage
+        q_level = min(1.0, max(0.0, desired_coverage))
+        conformal_radius = float(np.quantile(abs_res, q_level))
+
+        adjusted_lower = float(prediction - conformal_radius)
+        adjusted_upper = float(prediction + conformal_radius)
+        return adjusted_lower, adjusted_upper
+
+
+def update_calibration_metrics(
+    predicted_probs: list[float],
+    actual_outcomes: list[bool],
+    num_bins: int = 10,
+) -> dict[str, Any]:
+    """Module-level helper to compute and update calibration metrics."""
+    analyzer = CalibrationAnalyzer(num_bins=num_bins)
+    return analyzer.update_calibration_metrics(predicted_probs, actual_outcomes)
