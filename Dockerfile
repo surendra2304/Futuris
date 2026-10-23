@@ -13,6 +13,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt pyproject.toml README.md ./
 COPY futuris ./futuris
+COPY --from=ui-builder /ui/dist ./futuris/ui/dist
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt && \
