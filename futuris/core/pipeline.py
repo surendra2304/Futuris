@@ -25,7 +25,12 @@ from futuris.evidence.snapshots import EvidenceSnapshotter
 from futuris.features.contextualize import ContextLayer
 from futuris.features.drivers import DriverAnalyzer
 from futuris.features.normalize import Normalizer, TrustedSignalSet
-from futuris.infra.cpu import cpu_saturated, run_cpu, run_cpu_process
+from futuris.infra.cpu import (
+    cpu_saturated,
+    run_cpu,
+    run_cpu_process,
+    run_cpu_process_cancellable,
+)
 from futuris.infra.logging import get_logger
 from futuris.models.base import ModelPrediction
 from futuris.models.registry import model_registry
@@ -165,7 +170,22 @@ class ModelingStage:
 
         async def fit_with_lease(lease: HeavyTaskLease) -> ModelingOutput:
             lease.ensure_valid()
-            result = await self._execute_uncoordinated(inp, evidence_ref)
+            if type(self.router) is not ModelRouter:
+                # A custom router may execute non-cooperative native/thread code
+                # that cannot be stopped after lease loss. Refuse to claim
+                # distributed exclusivity rather than leave an orphaned worker.
+                raise RuntimeError(
+                    "distributed lease-protected modeling requires the default "
+                    "ModelRouter or a dedicated cancellable worker adapter"
+                )
+            result = await run_cpu_process_cancellable(
+                "modeling",
+                _fit_modeling_in_worker,
+                inp,
+                evidence_ref,
+                cpu_saturated(),
+                _exclusive=True,
+            )
             lease.ensure_valid()
             return result
 
