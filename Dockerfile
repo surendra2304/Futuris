@@ -11,8 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements.txt pyproject.toml README.md ./
-COPY futuris ./futuris
+COPY Futuris/requirements.txt Futuris/pyproject.toml Futuris/README.md ./
+COPY Futuris/futuris ./futuris
+COPY mesh ./mesh
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt && \
@@ -41,6 +42,7 @@ RUN mkdir -p /app/data /app/data/storage && \
     chown -R appuser:appuser /app
 
 COPY --from=builder /build/futuris /app/futuris
+COPY --from=builder /build/mesh /app/mesh
 RUN chown -R appuser:appuser /app
 
 USER appuser
