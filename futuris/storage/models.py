@@ -14,8 +14,14 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
+
+
+@compiles(JSON, "oracle")
+def _compile_json_oracle(type_, compiler, **kw):
+    return "JSON" 
 
 
 class Base(DeclarativeBase):
