@@ -83,8 +83,12 @@ else:
     engine_kwargs["pool_recycle"] = 1800
     engine_kwargs["pool_pre_ping"] = True
 
+_effective_db_url = settings.DATABASE_URL
+if _effective_db_url.startswith("oracle+oracledb://"):
+    _effective_db_url = "oracle+oracledb_async://" + _effective_db_url[len("oracle+oracledb://"):]
+
 engine: AsyncEngine = create_async_engine(
-    settings.DATABASE_URL,
+    _effective_db_url,
     **engine_kwargs,
 )
 
