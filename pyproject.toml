@@ -19,6 +19,7 @@ dependencies = [
     "apscheduler>=3.10.4,<4.0.0",
     "structlog>=24.1.0",
     "httpx>=0.27.0,<1.0.0",
+    "redis>=5.0,<7.0",
     "statsforecast>=1.7.0",
     "pandas>=2.2.0",
     "numpy>=1.26.0",
