@@ -1,4 +1,12 @@
 # Multi-stage production hardened Dockerfile for Futuris API
+# Build the web console as part of the same image artifact.
+FROM node:22-alpine AS ui-builder
+WORKDIR /ui
+COPY futuris/ui/package*.json ./
+RUN npm ci
+COPY futuris/ui/ ./
+RUN npm run build
+
 FROM python:3.11-slim AS builder
 
 WORKDIR /build
