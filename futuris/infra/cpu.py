@@ -21,6 +21,7 @@ import asyncio
 import os
 import threading
 import time
+import traceback
 import weakref
 from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor
@@ -188,6 +189,193 @@ def _discard_broken_pool(pool: ProcessPoolExecutor) -> None:
             _process_pool = None
     # Broken pools should be discarded without blocking the request loop.
     pool.shutdown(wait=False, cancel_futures=True)
+
+
+class CPUWorkerError(RuntimeError):
+    """An isolated CPU worker exited without returning a valid result."""
+
+    def __init__(self, message: str, *, remote_traceback: str = "") -> None:
+        super().__init__(message)
+        self.remote_traceback = remote_traceback
+
+
+def _isolated_process_worker(
+    send_connection: Any,
+    func: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> None:
+    """Execute one picklable CPU job in a disposable spawned child."""
+    try:
+        send_connection.send(("ok", func(*args, **kwargs)))
+    except BaseException as exc:
+        remote_traceback = traceback.format_exc()
+        try:
+            send_connection.send(("error", exc, remote_traceback))
+        except BaseException:
+            # Some custom exception instances cannot be pickled. Preserve the
+            # useful type/message/traceback without risking a silent EOF.
+            send_connection.send(
+                (
+                    "error_fallback",
+                    type(exc).__module__,
+                    type(exc).__name__,
+                    str(exc),
+                    remote_traceback,
+                )
+            )
+    finally:
+        send_connection.close()
+
+
+def _terminate_and_join_process(process: Any, grace_seconds: float = 1.0) -> None:
+    """Terminate a specific isolated worker and reap it before releasing a lease."""
+    if process.pid is None:
+        return
+    if process.is_alive():
+        process.terminate()
+    process.join(timeout=grace_seconds)
+    if process.is_alive():
+        process.kill()
+        process.join()
+
+
+def _raise_worker_message(message: tuple[Any, ...]) -> Any:
+    """Return worker output or re-raise a picklable remote exception."""
+    status = message[0]
+    if status == "ok":
+        return message[1]
+    if status == "error":
+        exc, remote_traceback = message[1], message[2]
+        if isinstance(exc, Exception):
+            try:
+                setattr(exc, "remote_traceback", remote_traceback)
+            except Exception:
+                pass
+            raise exc
+        raise CPUWorkerError(
+            f"CPU worker raised {type(exc).__name__}: {exc}",
+            remote_traceback=remote_traceback,
+        )
+    if status == "error_fallback":
+        _, module, name, detail, remote_traceback = message
+        raise CPUWorkerError(
+            f"CPU worker raised {module}.{name}: {detail}",
+            remote_traceback=remote_traceback,
+        )
+    raise CPUWorkerError("CPU worker returned an invalid result envelope")
+
+
+async def run_cpu_process_cancellable(
+    kind: str,
+    func: Callable[..., T],
+    *args: Any,
+    _exclusive: bool = True,
+    _timeout_seconds: float | None = None,
+    **kwargs: Any,
+) -> T:
+    """Run CPU work in a disposable process that is killed on cancellation.
+
+    Unlike ProcessPoolExecutor, a running function in this per-job process can
+    be terminated when the coroutine is cancelled. This is essential for
+    lease-protected heavy work: losing a distributed lease must not leave a
+    stale model-fit process burning CPU after another worker acquires the lease.
+
+    The function and all arguments/results must be picklable. Cancellation
+    waits for the child to terminate and be reaped before returning to the
+    coordinator, so a caller can safely release its lease afterwards.
+    """
+    global _process_pending
+    if _timeout_seconds is not None and (
+        isinstance(_timeout_seconds, bool)
+        or not isinstance(_timeout_seconds, (int, float))
+        or _timeout_seconds <= 0
+    ):
+        raise ValueError("_timeout_seconds must be positive or None")
+
+    with _process_pending_lock:
+        _process_pending += 1
+    CPU_QUEUE_DEPTH.set(cpu_queue_depth())
+
+    async def execute_isolated() -> T:
+        context = get_context("spawn")
+        receive_connection, send_connection = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_isolated_process_worker,
+            args=(send_connection, func, args, kwargs),
+            name=f"futuris-{kind}-isolated-worker",
+        )
+        started = False
+        started_at = time.monotonic()
+        CPU_WORK_IN_FLIGHT.labels(kind).inc()
+        try:
+            process.start()
+            started = True
+            send_connection.close()
+            while True:
+                if receive_connection.poll():
+                    try:
+                        message = await asyncio.to_thread(receive_connection.recv)
+                    except EOFError as exc:
+                        await asyncio.to_thread(process.join)
+                        raise CPUWorkerError(
+                            f"CPU worker for {kind!r} exited without a result "
+                            f"(exit code {process.exitcode})"
+                        ) from exc
+                    await asyncio.to_thread(process.join)
+                    return _raise_worker_message(message)
+
+                if not process.is_alive():
+                    await asyncio.to_thread(process.join)
+                    if receive_connection.poll():
+                        message = await asyncio.to_thread(receive_connection.recv)
+                        return _raise_worker_message(message)
+                    raise CPUWorkerError(
+                        f"CPU worker for {kind!r} exited without a result "
+                        f"(exit code {process.exitcode})"
+                    )
+
+                if (
+                    _timeout_seconds is not None
+                    and time.monotonic() - started_at >= _timeout_seconds
+                ):
+                    await asyncio.to_thread(_terminate_and_join_process, process, 0.5)
+                    raise TimeoutError(
+                        f"isolated CPU worker {kind!r} exceeded "
+                        f"{_timeout_seconds:g} seconds"
+                    )
+                await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            if started:
+                # Do not release a coordinator lease until the old child has
+                # actually stopped; cancellation of an await alone is not enough.
+                await asyncio.to_thread(_terminate_and_join_process, process, 0.5)
+            raise
+        finally:
+            receive_connection.close()
+            send_connection.close()
+            if started and process.is_alive():
+                await asyncio.to_thread(_terminate_and_join_process, process, 0.5)
+            CPU_WORK_IN_FLIGHT.labels(kind).dec()
+
+    try:
+        if not _exclusive:
+            return await execute_isolated()
+
+        gate = _process_gate()
+        if gate.locked():
+            queued_at = time.perf_counter()
+            async with gate:
+                wait = time.perf_counter() - queued_at
+                CPU_QUEUE_WAIT_SECONDS.labels(kind).observe(wait)
+                logger.info("cpu_process_queue_wait", kind=kind, wait_seconds=round(wait, 3))
+                return await execute_isolated()
+        async with gate:
+            return await execute_isolated()
+    finally:
+        with _process_pending_lock:
+            _process_pending = max(0, _process_pending - 1)
+        CPU_QUEUE_DEPTH.set(cpu_queue_depth())
 
 
 async def run_cpu_process(
