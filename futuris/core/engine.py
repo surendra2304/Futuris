@@ -15,7 +15,13 @@ from futuris.features.contextualize import ContextLayer
 from futuris.features.drivers import DriverAnalyzer
 from futuris.features.normalize import Normalizer
 from futuris.infra.config import settings
-from futuris.infra.cpu import cpu_saturated, run_cpu, run_cpu_process
+from mesh.heavy_task import HeavyTaskCoordinator, HeavyTaskLease, coordinator_from_environment
+from futuris.infra.cpu import (
+    cpu_saturated,
+    run_cpu,
+    run_cpu_process,
+    run_cpu_process_cancellable,
+)
 from futuris.infra.logging import get_logger
 from futuris.models.ai_universe_enhanced import AIUniverseModelEnhancer
 from futuris.models.base import ModelPrediction
@@ -40,6 +46,7 @@ class ForecastEngine:
         driver_analyzer: DriverAnalyzer | None = None,
         intelx_injector: IntelXContextInjector | None = None,
         enhancer: AIUniverseModelEnhancer | None = None,
+        heavy_task_coordinator: HeavyTaskCoordinator | None = None,
     ) -> None:
         self.connector = connector or SyntheticTelemetryConnector(seed=42)
         self.snapshotter = snapshotter or EvidenceSnapshotter()
@@ -53,6 +60,11 @@ class ForecastEngine:
             api_key=settings.INTELX_API_KEY,
         )
         self.enhancer = enhancer or AIUniverseModelEnhancer()
+        self.heavy_task_coordinator = (
+            heavy_task_coordinator
+            if heavy_task_coordinator is not None
+            else coordinator_from_environment()
+        )
 
     async def orchestrate(
         self,
@@ -93,6 +105,49 @@ class ForecastEngine:
             logger.warning("intelx_context_injection_skipped", target=target, error=str(exc))
 
         degraded = cpu_saturated()
+        coordinator = self.heavy_task_coordinator
+
+        if coordinator is not None:
+            if not self._supports_process_isolation():
+                # Injected component graphs can include non-picklable or
+                # non-cancellable native work. Do not claim fleet-wide
+                # serialization for a workload we cannot stop on lease loss.
+                raise RuntimeError(
+                    "distributed forecast execution requires default, process-isolatable "
+                    "components or an explicit cancellable worker adapter"
+                )
+
+            async def run_coordinated_forecast(lease: HeavyTaskLease) -> list[Forecast]:
+                lease.ensure_valid()
+                result = await run_cpu_process_cancellable(
+                    "orchestrate",
+                    _orchestrate_with_default_components,
+                    str(self.snapshotter.base_storage_path),
+                    sorted(self.snapshotter.denied_fields),
+                    float(self.enhancer.confidence_scaling),
+                    _exclusive=True,
+                    target=target,
+                    as_of=as_of,
+                    horizon=horizon,
+                    capacity_threshold=capacity_threshold,
+                    raw_observations=raw_observations,
+                    intelx_reports=intelx_reports,
+                    exogenous_adj=exogenous_adj,
+                    evidence_scope=evidence_scope,
+                    historical_resolved_count=historical_resolved_count,
+                    model_budget_seconds=model_budget_seconds,
+                    cpu_saturated=degraded,
+                )
+                lease.ensure_valid()
+                return result
+
+            return await coordinator.run(
+                task_id="futuris:forecast-engine",
+                owner="futuris",
+                operation=run_coordinated_forecast,
+                wait_timeout=None,
+            )
+
         if self._supports_process_isolation():
             return await run_cpu_process(
                 "orchestrate",
