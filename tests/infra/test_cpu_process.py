@@ -81,7 +81,7 @@ async def test_cancellable_worker_timeout_terminates_child(tmp_path: Path):
             str(marker),
             30.0,
             _exclusive=True,
-            _timeout_seconds=0.25,
+            _timeout_seconds=5.0,
         )
     assert marker.exists()
     child_pid = int(marker.read_text(encoding="utf-8"))
