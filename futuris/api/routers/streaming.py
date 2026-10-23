@@ -125,7 +125,8 @@ async def sse_forecast_events(
     target: str | None = Query(None, description="Optional target metric filter"),
 ) -> StreamingResponse:
     """Streams real-time forecast updates, evaluations, and alerts via Server-Sent Events (SSE)."""
-    sub_id, queue = await stream_hub.register(target_filter=target)
+    target_filter = target if isinstance(target, str) else None
+    sub_id, queue = await stream_hub.register(target_filter=target_filter)
 
     async def event_generator():
         try:
@@ -133,9 +134,34 @@ async def sse_forecast_events(
             init_data = json.dumps({
                 "status": "connected",
                 "subscriber_id": sub_id,
-                "target": target or "*",
+                "target": target_filter or "*",
             })
             yield f"event: connected\ndata: {init_data}\n\n".encode()
+
+            # Push immediate portfolio risk snapshot upon client connection
+            from futuris.api.routers.risk import (
+                calculate_portfolio_risk_payload,
+                get_latest_portfolio_risk,
+            )
+
+            risk_snapshot = get_latest_portfolio_risk()
+            if not risk_snapshot:
+                try:
+                    risk_snapshot = await calculate_portfolio_risk_payload()
+                except Exception as snap_err:
+                    logger.debug("risk_snapshot_init_failed", error=str(snap_err))
+
+            if risk_snapshot:
+                snap_msg = {
+                    "type": "risk_portfolio_update",
+                    "target": "portfolio:risk",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "data": risk_snapshot,
+                }
+                yield (
+                    f"event: risk_portfolio_update\n"
+                    f"data: {json.dumps(snap_msg, default=str)}\n\n"
+                ).encode()
 
             while True:
                 # Check for client disconnect
@@ -189,6 +215,27 @@ async def websocket_forecasts(websocket: WebSocket) -> None:
             "message": "Connected to Futuris Real-Time Forecast Stream",
             "timestamp": datetime.now(UTC).isoformat(),
         })
+
+        # Send immediate portfolio risk snapshot
+        from futuris.api.routers.risk import (
+            calculate_portfolio_risk_payload,
+            get_latest_portfolio_risk,
+        )
+
+        risk_snapshot = get_latest_portfolio_risk()
+        if not risk_snapshot:
+            try:
+                risk_snapshot = await calculate_portfolio_risk_payload()
+            except Exception as snap_err:
+                logger.debug("ws_risk_snapshot_init_failed", error=str(snap_err))
+
+        if risk_snapshot:
+            await websocket.send_json({
+                "type": "risk_portfolio_update",
+                "target": "portfolio:risk",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "data": risk_snapshot,
+            })
 
         while True:
             data = await websocket.receive_json()

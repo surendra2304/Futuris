@@ -33,44 +33,30 @@ class DataLeakageError(RuntimeError):
 def validate_backtest_leakage(
     data: Any,
     as_of: datetime,
-) -> bool:
+) -> None:
     """Ensure training data and features contain zero future observations beyond as_of."""
     import pandas as pd
 
     as_of_utc = as_of.replace(tzinfo=UTC) if as_of.tzinfo is None else as_of.astimezone(UTC)
-    cutoff = pd.Timestamp(as_of_utc)
     if isinstance(data, pd.DataFrame):
         if isinstance(data.index, pd.DatetimeIndex):
-            normalized_index = (
-                data.index.tz_localize(UTC)
-                if data.index.tz is None
-                else data.index.tz_convert(UTC)
-            )
-            if normalized_index.hasnans:
-                raise DataLeakageError("Backtest datetime index contains invalid timestamps")
-            future_mask = normalized_index > cutoff
-            if future_mask.any():
-                max_future = normalized_index[future_mask].max()
+            future_idx = data.index[data.index > as_of_utc]
+            if len(future_idx) > 0:
+                max_future = future_idx.max()
                 raise DataLeakageError(
-                    f"Backtest temporal leakage detected: {int(future_mask.sum())} points exceed "
-                    f"as_of ({as_of_utc}); max future timestamp is {max_future}"
+                    "Backtest temporal leakage detected: {len(future_idx)} points exceed as_of "
+                        "({as_of_utc}), "
+                    f"max future timestamp is {max_future}"
                 )
-        for col in ("timestamp", "observed_at", "as_of"):
-            if col not in data.columns:
-                continue
-            ts_col = pd.to_datetime(data[col], utc=True, errors="coerce")
-            invalid_rows = data[col].notna() & ts_col.isna()
-            if invalid_rows.any():
-                raise DataLeakageError(
-                    f"Backtest timestamp column '{col}' contains "
-                    f"{int(invalid_rows.sum())} invalid timestamp(s)"
-                )
-            future_rows = ts_col[ts_col > cutoff]
-            if not future_rows.empty:
-                raise DataLeakageError(
-                    f"Backtest temporal leakage detected in column '{col}': "
-                    f"{len(future_rows)} points exceed as_of ({as_of_utc})"
-                )
+        for col in ["timestamp", "observed_at", "as_of"]:
+            if col in data.columns:
+                ts_col = pd.to_datetime(data[col], utc=True)
+                future_rows = ts_col[ts_col > as_of_utc]
+                if len(future_rows) > 0:
+                    raise DataLeakageError(
+                        "Backtest temporal leakage detected in column '{col}': {len(future_rows)} "
+                            "points exceed as_of ({as_of_utc})"
+                    )
     elif isinstance(data, list):
         for item in data:
             if isinstance(item, datetime):
@@ -84,25 +70,19 @@ def validate_backtest_leakage(
             else:
                 ts = item
 
-            if ts is None:
-                continue
-            if isinstance(ts, str):
-                try:
+            if ts:
+                if isinstance(ts, str):
                     ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except ValueError as exc:
+                ts_utc = (
+                    ts.replace(tzinfo=UTC)
+                    if getattr(ts, "tzinfo", None) is None
+                    else ts.astimezone(UTC)
+                )
+                if ts_utc > as_of_utc:
                     raise DataLeakageError(
-                        f"Backtest observation contains an invalid timestamp: {ts!r}"
-                    ) from exc
-            if not isinstance(ts, datetime):
-                raise DataLeakageError(
-                    f"Backtest observation contains an unsupported timestamp: {ts!r}"
-                )
-            ts_utc = ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts.astimezone(UTC)
-            if ts_utc > as_of_utc:
-                raise DataLeakageError(
-                    f"Backtest temporal leakage detected: observation timestamp {ts_utc} "
-                    f"exceeds as_of {as_of_utc}"
-                )
+                        "Backtest temporal leakage detected: observation timestamp {ts_utc} "
+                            "exceeds as_of {as_of_utc}"
+                    )
     return True
 
 

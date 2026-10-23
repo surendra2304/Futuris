@@ -254,6 +254,9 @@ class TradingBotConnector(BaseConnector):
             f"{self.base_url}/api/v1/status",
             f"{self.base_url}/v1/positions",
             f"{self.base_url}/api/v1/trades/active",
+            f"{self.base_url}/api/v1/futures/positions",
+            f"{self.base_url}/fapi/v1/positionRisk",
+            f"{self.base_url}/api/v1/futures/open-orders",
         ]
 
         try:
@@ -294,7 +297,14 @@ class TradingBotConnector(BaseConnector):
                                         or ""
                                     )
                                 if sym:
-                                    clean = sym.upper().replace("-", "").replace("/", "").strip()
+                                    clean = (
+                                        sym.upper()
+                                        .replace("-", "")
+                                        .replace("/", "")
+                                        .replace("_PERP", "")
+                                        .replace("-PERP", "")
+                                        .strip()
+                                    )
                                     if 3 <= len(clean) <= 15:
                                         discovered.add(clean)
                     except Exception as err:
@@ -332,57 +342,110 @@ class TradingBotConnector(BaseConnector):
         }
         positions: list[dict[str, Any]] = []
 
+        pos_endpoints = [
+            f"{self.base_url}/api/v1/positions",
+            f"{self.base_url}/api/v1/futures/positions",
+            f"{self.base_url}/fapi/v1/positionRisk",
+        ]
+
         try:
             async with httpx.AsyncClient(
                 transport=self.transport, timeout=self.timeout_seconds
             ) as client:
-                resp = await client.get(f"{self.base_url}/api/v1/positions", headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    raw_list = (
-                        data
-                        if isinstance(data, list)
-                        else data.get("positions", data.get("data", []))
-                    )
-                    if isinstance(raw_list, list):
-                        for p in raw_list:
-                            if isinstance(p, dict) and p.get("symbol"):
-                                sym_val = (
-                                    str(p["symbol"])
-                                    .upper()
-                                    .replace("-", "")
-                                    .replace("/", "")
-                                )
-                                curr_price = float(
-                                    p.get("current_price")
-                                    or p.get("mark_price")
-                                    or p.get("price")
-                                    or 0.0
-                                )
-                                positions.append(
-                                    {
-                                        "symbol": sym_val,
-                                        "side": str(p.get("side", "LONG")).upper(),
-                                        "size": float(p.get("size") or p.get("quantity") or 1.0),
-                                        "entry_price": float(
-                                            p.get("entry_price") or p.get("entry") or 0.0
-                                        ),
-                                        "current_price": curr_price,
-                                        "unrealized_pnl": float(
-                                            p.get("unrealized_pnl") or p.get("pnl") or 0.0
-                                        ),
-                                        "leverage": int(p.get("leverage") or 1),
-                                        "liquidation_price": float(
-                                            p.get("liquidation_price") or 0.0
-                                        ),
-                                        "margin": float(
-                                            p.get("margin") or p.get("collateral") or 0.0
-                                        ),
-                                        "updated_at": (
-                                            p.get("updated_at") or datetime.now(UTC).isoformat()
-                                        ),
-                                    }
-                                )
+                for ep in pos_endpoints:
+                    try:
+                        resp = await client.get(ep, headers=headers)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            raw_list = (
+                                data
+                                if isinstance(data, list)
+                                else data.get("positions", data.get("data", []))
+                            )
+                            if isinstance(raw_list, list) and raw_list:
+                                for p in raw_list:
+                                    if isinstance(p, dict) and p.get("symbol"):
+                                        sym_val = (
+                                            str(p["symbol"])
+                                            .upper()
+                                            .replace("-", "")
+                                            .replace("/", "")
+                                            .replace("_PERP", "")
+                                            .replace("-PERP", "")
+                                            .strip()
+                                        )
+                                        curr_price = float(
+                                            p.get("current_price")
+                                            or p.get("mark_price")
+                                            or p.get("markPrice")
+                                            or p.get("price")
+                                            or 0.0
+                                        )
+                                        positions.append(
+                                            {
+                                                "symbol": sym_val,
+                                                "side": str(p.get("side", "LONG")).upper(),
+                                                "size": float(
+                                                    p.get("size")
+                                                    or p.get("positionAmt")
+                                                    or p.get("quantity")
+                                                    or 1.0
+                                                ),
+                                                "entry_price": float(
+                                                    p.get("entry_price")
+                                                    or p.get("entryPrice")
+                                                    or p.get("entry")
+                                                    or 0.0
+                                                ),
+                                                "current_price": curr_price,
+                                                "unrealized_pnl": float(
+                                                    p.get("unrealized_pnl")
+                                                    or p.get("unRealizedProfit")
+                                                    or p.get("pnl")
+                                                    or 0.0
+                                                ),
+                                                "leverage": int(p.get("leverage") or 1),
+                                                "liquidation_price": float(
+                                                    p.get("liquidation_price")
+                                                    or p.get("liquidationPrice")
+                                                    or 0.0
+                                                ),
+                                                "margin": float(
+                                                    p.get("margin")
+                                                    or p.get("isolatedMargin")
+                                                    or p.get("collateral")
+                                                    or 0.0
+                                                ),
+                                                "margin_type": str(
+                                                    p.get("margin_type")
+                                                    or p.get("marginType")
+                                                    or "CROSS"
+                                                ).upper(),
+                                                "isolated_wallet": float(
+                                                    p.get("isolated_wallet")
+                                                    or p.get("isolatedWallet")
+                                                    or 0.0
+                                                ),
+                                                "funding_rate": float(
+                                                    p.get("funding_rate")
+                                                    or p.get("fundingRate")
+                                                    or 0.0
+                                                ),
+                                                "updated_at": (
+                                                    p.get("updated_at")
+                                                    or datetime.now(UTC).isoformat()
+                                                ),
+                                            }
+                                        )
+                                if positions:
+                                    break
+                    except Exception as ep_err:
+                        logger.debug(
+                            "positions_endpoint_failed",
+                            endpoint=ep,
+                            error=str(ep_err),
+                        )
+                        continue
         except Exception as exc:
             logger.debug("active_positions_remote_fetch_failed", error=str(exc))
 
@@ -399,6 +462,9 @@ class TradingBotConnector(BaseConnector):
                     "leverage": 5,
                     "liquidation_price": 54200.0,
                     "margin": 5962.50,
+                    "margin_type": "CROSS",
+                    "isolated_wallet": 0.0,
+                    "funding_rate": 0.0001,
                     "updated_at": now_iso,
                 },
                 {
@@ -411,6 +477,9 @@ class TradingBotConnector(BaseConnector):
                     "leverage": 5,
                     "liquidation_price": 2110.0,
                     "margin": 2167.20,
+                    "margin_type": "CROSS",
+                    "isolated_wallet": 0.0,
+                    "funding_rate": 0.0001,
                     "updated_at": now_iso,
                 },
                 {
@@ -423,11 +492,88 @@ class TradingBotConnector(BaseConnector):
                     "leverage": 3,
                     "liquidation_price": 120.0,
                     "margin": 1965.83,
+                    "margin_type": "CROSS",
+                    "isolated_wallet": 0.0,
+                    "funding_rate": 0.0001,
                     "updated_at": now_iso,
                 },
             ]
 
         return positions
+
+    async def fetch_futures_funding_telemetry(self, symbol: str) -> dict[str, Any]:
+        """Fetch real-time Binance Futures 8h funding rate and mark price from Stratex.
+
+        Falls back to calibrated neutral/baseline funding rates if Stratex is unreachable.
+        """
+        clean = (
+            symbol.upper()
+            .replace("-", "")
+            .replace("/", "")
+            .replace("_PERP", "")
+            .replace("-PERP", "")
+            .strip()
+        )
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "X-API-Key": (
+                self.api_key
+                if self.api_key != TRADING_BOT_DEFAULT_KEY
+                else TRADING_BOT_DEFAULT_READ_KEY
+            ),
+            "Accept": "application/json",
+        }
+        endpoints = [
+            f"{self.base_url}/fapi/v1/fundingRate?symbol={clean}&limit=1",
+            f"{self.base_url}/api/v1/futures/funding-rate?symbol={clean}",
+        ]
+        try:
+            async with httpx.AsyncClient(
+                transport=self.transport, timeout=self.timeout_seconds
+            ) as client:
+                for ep in endpoints:
+                    try:
+                        resp = await client.get(ep, headers=headers)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            item = data[0] if isinstance(data, list) and data else data
+                            if isinstance(item, dict):
+                                return {
+                                    "symbol": clean,
+                                    "funding_rate": float(
+                                        item.get("funding_rate")
+                                        or item.get("fundingRate")
+                                        or 0.0001
+                                    ),
+                                    "funding_time": (
+                                        item.get("funding_time")
+                                        or item.get("fundingTime")
+                                        or datetime.now(UTC).isoformat()
+                                    ),
+                                    "mark_price": float(
+                                        item.get("mark_price")
+                                        or item.get("markPrice")
+                                        or 0.0
+                                    ),
+                                    "predicted_rate": float(
+                                        item.get("predicted_rate")
+                                        or item.get("predictedRate")
+                                        or 0.0001
+                                    ),
+                                }
+                    except Exception as err:
+                        logger.debug("funding_telemetry_endpoint_failed", ep=ep, error=str(err))
+                        continue
+        except Exception as exc:
+            logger.debug("futures_funding_telemetry_fetch_failed", error=str(exc))
+
+        return {
+            "symbol": clean,
+            "funding_rate": 0.0001,
+            "funding_time": datetime.now(UTC).isoformat(),
+            "mark_price": 0.0,
+            "predicted_rate": 0.0001,
+        }
 
 
 # Standard Trading Forecast Targets
