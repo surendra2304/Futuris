@@ -226,22 +226,26 @@ async def get_stratex_trade_pairs(
     }
 
 
-@router.get("/portfolio", summary="Unified Stratex Portfolio Tail-Risk Assessment")
-async def get_portfolio_tail_risk(
-    window_days: int = Query(default=30, ge=3, le=365, description="Lookback window in days"),
-    confidence_level: float = Query(
-        default=0.95, ge=0.80, le=0.999, description="Confidence level"
-    ),
-    user: AllowAnonymousRead = None,
-    obs_repo: ObservationRepository = Depends(get_observation_repo),
+_LATEST_PORTFOLIO_RISK: dict[str, Any] | None = None
+
+
+def get_latest_portfolio_risk() -> dict[str, Any] | None:
+    """Return the most recently computed portfolio tail-risk payload snapshot."""
+    return _LATEST_PORTFOLIO_RISK
+
+
+async def calculate_portfolio_risk_payload(
+    obs_repo: ObservationRepository | None = None,
+    window_days: int = 30,
+    confidence_level: float = 0.95,
 ) -> dict[str, Any]:
-    _ = user
-    """Comprehensive portfolio tail-risk evaluation across all active Stratex pairs and positions.
+    """Calculate comprehensive portfolio tail-risk metrics across all active pairs and positions.
 
     Evaluates Value at Risk (VaR 95/99), Expected Shortfall (CVaR), Kupiec POF backtests,
     and Basel regulatory traffic light status across the live trading book.
     Safety Invariant: prediction_is_not_authorization.
     """
+    global _LATEST_PORTFOLIO_RISK
     now = datetime.now(UTC)
     start_dt = now - timedelta(days=window_days)
     connector = TradingBotConnector()
@@ -276,17 +280,23 @@ async def get_portfolio_tail_risk(
     for pair in pairs:
         returns: list[float] = []
 
-        # Check DB observations
-        obs = await obs_repo.list_by_series(
-            series_id=f"trading:{pair.upper()}:price", limit=300, since=start_dt, until=now
-        )
-        if len(obs) >= 10:
-            prices = [o.value for o in obs if o.value > 0]
-            if len(prices) >= 10:
-                returns = [
-                    (prices[i] - prices[i - 1]) / prices[i - 1]
-                    for i in range(1, len(prices))
-                ]
+        if obs_repo is not None:
+            try:
+                obs = await obs_repo.list_by_series(
+                    series_id=f"trading:{pair.upper()}:price",
+                    limit=300,
+                    since=start_dt,
+                    until=now,
+                )
+                if len(obs) >= 10:
+                    prices = [o.value for o in obs if o.value > 0]
+                    if len(prices) >= 10:
+                        returns = [
+                            (prices[i] - prices[i - 1]) / prices[i - 1]
+                            for i in range(1, len(prices))
+                        ]
+            except Exception as obs_err:
+                logger.debug("obs_repo_list_failed", pair=pair, error=str(obs_err))
 
         if len(returns) < 10:
             returns = _generate_calibrated_returns(pair, sample_size=max(100, window_days * 3))
@@ -350,6 +360,32 @@ async def get_portfolio_tail_risk(
         "prediction_is_not_authorization": True,
         "timestamp": now.isoformat(),
     }
+
+    _LATEST_PORTFOLIO_RISK = portfolio_payload
+    return portfolio_payload
+
+
+@router.get("/portfolio", summary="Unified Stratex Portfolio Tail-Risk Assessment")
+async def get_portfolio_tail_risk(
+    window_days: int = Query(default=30, ge=3, le=365, description="Lookback window in days"),
+    confidence_level: float = Query(
+        default=0.95, ge=0.80, le=0.999, description="Confidence level"
+    ),
+    user: AllowAnonymousRead = None,
+    obs_repo: ObservationRepository = Depends(get_observation_repo),
+) -> dict[str, Any]:
+    """Comprehensive portfolio tail-risk evaluation across all active Stratex pairs and positions.
+
+    Evaluates Value at Risk (VaR 95/99), Expected Shortfall (CVaR), Kupiec POF backtests,
+    and Basel regulatory traffic light status across the live trading book.
+    Safety Invariant: prediction_is_not_authorization.
+    """
+    _ = user
+    portfolio_payload = await calculate_portfolio_risk_payload(
+        obs_repo=obs_repo,
+        window_days=window_days,
+        confidence_level=confidence_level,
+    )
 
     try:
         await stream_hub.broadcast("risk_portfolio_update", portfolio_payload)

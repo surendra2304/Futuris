@@ -131,6 +131,13 @@ async def test_calibration_sweep_resolves_and_penalizes_overconfidence(
         metrics = await scheduler.calibration_sweep_job()
 
         assert metrics["resolved_count"] >= 1
+        # Target-level breakdown
+        assert "target_breakdown" in metrics
+        assert "service:checkout:capacity_exceedance_24h" in metrics["target_breakdown"]
+        tb = metrics["target_breakdown"]["service:checkout:capacity_exceedance_24h"]
+        assert tb["brier_score"] > 0.20
+        assert tb["resolved_count"] >= 1
+
         # Predicted 0.95 probability but outcome event was FALSE (did not exceed)
         # Brier score should be (0.95 - 0.0)^2 = ~0.9025
         assert metrics["brier_score"] > 0.20
@@ -146,11 +153,71 @@ async def test_scheduler_registers_and_shuts_down() -> None:
     try:
         job_ids = [j.id for j in scheduler.scheduler.get_jobs()]
         assert "calibration_sweep_job" in job_ids
+        assert "stream_risk_pulse_job" in job_ids
         assert "ingest_job" in job_ids
         assert "forecast_refresh_job" in job_ids
     finally:
         await scheduler.shutdown()
         assert not scheduler.scheduler.running
+
+
+@pytest.mark.asyncio
+async def test_stream_risk_pulse_job_broadcasts_fan_chart_and_risk(monkeypatch) -> None:
+    """Verify stream_risk_pulse_job computes tail risk and broadcasts fan chart to stream_hub."""
+    import asyncio
+
+    from futuris.api.routers.streaming import stream_hub
+    from futuris.connectors.trading_bot import TradingBotConnector
+
+    # Mock connector to avoid external network calls
+    monkeypatch.setattr(
+        TradingBotConnector,
+        "discover_active_trade_pairs",
+        lambda self: asyncio.sleep(0, result=["BTCUSDT", "ETHUSDT"]),
+    )
+    monkeypatch.setattr(
+        TradingBotConnector,
+        "fetch_active_positions",
+        lambda self: asyncio.sleep(
+            0,
+            result=[{
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "size": 1.0,
+                "current_price": 68000.0,
+                "margin": 6800.0,
+                "unrealized_pnl": 500.0,
+            }],
+        ),
+    )
+
+    # Listen on stream_hub for risk_portfolio_update and fan_chart_simulation
+    sub_id, queue = await stream_hub.register(target_filter=None)
+
+    try:
+        scheduler = ForecastScheduler()
+        result = await scheduler.stream_risk_pulse_job()
+
+        assert "risk_payload" in result
+        assert "fan_chart" in result
+        fc = result["fan_chart"]
+        assert fc["prediction_is_not_authorization"] is True
+        assert fc["asset"] in {"BTCUSDT", "ETHUSDT"}
+        assert fc["horizon_hours"] == 24
+        assert len(fc["quantiles"]["p10"]) == 24
+        assert len(fc["quantiles"]["p50"]) == 24
+        assert len(fc["quantiles"]["p90"]) == 24
+
+        # Read broadcast events from stream_hub
+        events = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+
+        event_types = {e["type"] for e in events}
+        assert "risk_portfolio_update" in event_types
+        assert "fan_chart_simulation" in event_types
+    finally:
+        await stream_hub.unregister(sub_id)
 
 
 @pytest.mark.asyncio

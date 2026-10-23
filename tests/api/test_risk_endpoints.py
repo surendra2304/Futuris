@@ -176,3 +176,76 @@ async def test_portfolio_tail_risk_endpoint():
         assert "portfolio_cvar_95" in summary
         assert summary["overall_traffic_light"] in {"green", "yellow", "red"}
         assert "highest_risk_asset" in summary
+
+
+@pytest.mark.asyncio
+async def test_calculate_portfolio_risk_payload_and_cache(monkeypatch):
+    """Verify calculate_portfolio_risk_payload populates get_latest_portfolio_risk."""
+    from futuris.api.routers.risk import (
+        calculate_portfolio_risk_payload,
+        get_latest_portfolio_risk,
+    )
+    from futuris.connectors.trading_bot import TradingBotConnector
+
+    # Mock connector to prevent network timeout
+    monkeypatch.setattr(
+        TradingBotConnector,
+        "discover_active_trade_pairs",
+        lambda self: asyncio.sleep(0, result=["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
+    )
+    monkeypatch.setattr(
+        TradingBotConnector,
+        "fetch_active_positions",
+        lambda self: asyncio.sleep(
+            0,
+            result=[{
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "size": 0.5,
+                "current_price": 65000.0,
+                "margin": 5000.0,
+                "unrealized_pnl": 200.0,
+            }],
+        ),
+    )
+
+    payload = await calculate_portfolio_risk_payload(obs_repo=None, window_days=14)
+    assert payload["prediction_is_not_authorization"] is True
+    assert "portfolio_summary" in payload
+
+    cached = get_latest_portfolio_risk()
+    assert cached is not None
+    assert cached["timestamp"] == payload["timestamp"]
+
+
+@pytest.mark.asyncio
+async def test_sse_instant_risk_snapshot_on_connect():
+    """Verify SSE connection yields an immediate risk_portfolio_update event."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from futuris.api.routers import risk
+    from futuris.api.routers.streaming import sse_forecast_events
+
+    # Set cached snapshot directly
+    risk._LATEST_PORTFOLIO_RISK = {
+        "active_pairs": ["BTCUSDT"],
+        "portfolio_summary": {"overall_traffic_light": "green"},
+        "prediction_is_not_authorization": True,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+    mock_request = MagicMock()
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    resp = await sse_forecast_events(request=mock_request, target=None)
+    assert resp.status_code == 200
+    gen = resp.body_iterator
+
+    chunk1 = await gen.__anext__()
+    chunk2 = await gen.__anext__()
+
+    assert b"event: connected" in chunk1
+    assert b"event: risk_portfolio_update" in chunk2
+    assert b"\"overall_traffic_light\": \"green\"" in chunk2
+
+    await gen.aclose()

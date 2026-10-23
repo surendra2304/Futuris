@@ -93,19 +93,24 @@ def test_websocket_forecasts_lifecycle(test_client: TestClient):
         assert welcome["type"] == "welcome"
         assert "subscriber_id" in welcome
 
-        # 2. Ping-pong
+        # 2. Receive immediate risk portfolio snapshot
+        risk_snap = ws.receive_json()
+        assert risk_snap["type"] == "risk_portfolio_update"
+        assert "portfolio_summary" in risk_snap["data"]
+
+        # 3. Ping-pong
         ws.send_json({"action": "ping"})
         pong = ws.receive_json()
         assert pong["type"] == "pong"
         assert "timestamp" in pong
 
-        # 3. Subscribe to specific target
+        # 4. Subscribe to specific target
         ws.send_json({"action": "subscribe", "target": "service:auth:latency"})
         sub_ack = ws.receive_json()
         assert sub_ack["type"] == "subscribed"
         assert sub_ack["target"] == "service:auth:latency"
 
-        # 4. Trigger broadcast via global stream_hub
+        # 5. Trigger broadcast via global stream_hub
         asyncio.run(
             stream_hub.broadcast(
                 event_type="forecast_generated",
