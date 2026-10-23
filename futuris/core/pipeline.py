@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, TypeVar
+
+from mesh.heavy_task import HeavyTaskCoordinator, HeavyTaskLease, coordinator_from_environment
 from uuid import uuid4
 
 import pandas as pd
@@ -143,10 +145,38 @@ class ContextualizationStage:
 class ModelingStage:
     name = "modeling"
 
-    def __init__(self, router: ModelRouter | None = None) -> None:
+    def __init__(
+        self,
+        router: ModelRouter | None = None,
+        heavy_task_coordinator: HeavyTaskCoordinator | None = None,
+    ) -> None:
         self.router = router or ModelRouter()
+        self.heavy_task_coordinator = (
+            heavy_task_coordinator
+            if heavy_task_coordinator is not None
+            else coordinator_from_environment()
+        )
 
     async def execute(self, inp: ModelingInput, evidence_ref: EvidenceRef) -> ModelingOutput:
+        """Fit models under the cross-service heavy-task lease when configured."""
+        coordinator = self.heavy_task_coordinator
+        if coordinator is None:
+            return await self._execute_uncoordinated(inp, evidence_ref)
+
+        async def fit_with_lease(lease: HeavyTaskLease) -> ModelingOutput:
+            lease.ensure_valid()
+            result = await self._execute_uncoordinated(inp, evidence_ref)
+            lease.ensure_valid()
+            return result
+
+        return await coordinator.run(
+            task_id="futuris:model-fit",
+            owner="futuris",
+            operation=fit_with_lease,
+            wait_timeout=None,
+        )
+
+    async def _execute_uncoordinated(self, inp: ModelingInput, evidence_ref: EvidenceRef) -> ModelingOutput:
         """Fit and predict off the event loop, inside the shared CPU gate.
 
         The whole body is CPU-bound array work; keeping it on the loop measured
