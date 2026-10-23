@@ -20,8 +20,8 @@ from sqlalchemy.types import JSON
 
 
 @compiles(JSON, "oracle")
-def _compile_json_oracle(type_, compiler, **kw):
-    return "JSON" 
+def _compile_json_oracle(_type, _compiler, **_kw):
+    return "JSON"
 
 
 class Base(DeclarativeBase):
