@@ -339,6 +339,10 @@ app.include_router(explainability_router, prefix="/api/v1/futuris")
 from predict.prediction_drift_detector import router as drift_detector_router
 app.include_router(drift_detector_router, prefix="/api/v1/futuris")
 
+# --- Skill Acquisition Planner Integration ---
+from futuris.services.skill_acquisition_planner import router as skill_planner_router
+app.include_router(skill_planner_router, prefix="/api/v1/futuris")
+
 
 @app.post("/v1/task/execute", tags=["Universal Task Protocol"])
 @app.post("/api/v1/task/execute", tags=["Universal Task Protocol"], include_in_schema=False)
