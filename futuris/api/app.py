@@ -343,6 +343,10 @@ app.include_router(drift_detector_router, prefix="/api/v1/futuris")
 from futuris.services.skill_acquisition_planner import router as skill_planner_router
 app.include_router(skill_planner_router, prefix="/api/v1/futuris")
 
+# --- Counterfactual Forecaster Integration ---
+from futuris.services.counterfactual_forecaster import router as counterfactual_router
+app.include_router(counterfactual_router, prefix="/api/v1/futuris")
+
 
 @app.post("/v1/task/execute", tags=["Universal Task Protocol"])
 @app.post("/api/v1/task/execute", tags=["Universal Task Protocol"], include_in_schema=False)
