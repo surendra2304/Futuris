@@ -41,6 +41,7 @@ from futuris.predict.ensemble_reconciliation import router as ensemble_recon_rou
 from futuris.predict.predictive_maintenance import router as predictive_maintenance_router
 from futuris.predict.market_regime_detector import router as market_regime_router
 from futuris.predict.event_probability_forecaster import router as event_prob_router
+from futuris.predict.scenario_stress_tester import router as stress_test_router
 from futuris.api.routers.scenarios import fan_chart_router
 from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.api.routers.self_status import router as self_status_router
@@ -317,6 +318,7 @@ app.include_router(ensemble_recon_router, prefix="/api/v1/futuris")
 app.include_router(predictive_maintenance_router, prefix="/api/v1/futuris")
 app.include_router(market_regime_router, prefix="/api/v1/futuris")
 app.include_router(event_prob_router, prefix="/api/v1/futuris")
+app.include_router(stress_test_router, prefix="/api/v1/futuris")
 app.include_router(predictions_router)
 app.include_router(self_status_router)
 app.include_router(streaming_router)
