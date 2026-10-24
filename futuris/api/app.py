@@ -35,6 +35,7 @@ from futuris.api.routers.market import router as market_router
 from futuris.api.routers.models import router as models_router
 from futuris.api.routers.predictions import router as predictions_router
 from futuris.api.routers.risk import router as risk_router
+from futuris.predict.forecasting_engine import router as forecasting_engine_router
 from futuris.api.routers.scenarios import fan_chart_router
 from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.api.routers.self_status import router as self_status_router
@@ -305,6 +306,7 @@ app.include_router(ecosystem_router)
 app.include_router(market_router, prefix="/v1/futuris")
 app.include_router(market_router, prefix="/api/v1/futuris", include_in_schema=False)
 app.include_router(market_router, prefix="/v1/market", include_in_schema=False)
+app.include_router(forecasting_engine_router, prefix="/api/v1/futuris")
 app.include_router(predictions_router)
 app.include_router(self_status_router)
 app.include_router(streaming_router)
