@@ -35,6 +35,14 @@ from futuris.api.routers.market import router as market_router
 from futuris.api.routers.models import router as models_router
 from futuris.api.routers.predictions import router as predictions_router
 from futuris.api.routers.risk import router as risk_router
+from futuris.predict.forecasting_engine import router as forecasting_engine_router
+from futuris.predict.realtime_event_impact import router as event_impact_router
+from futuris.predict.ensemble_reconciliation import router as ensemble_recon_router
+from futuris.predict.predictive_maintenance import router as predictive_maintenance_router
+from futuris.predict.market_regime_detector import router as market_regime_router
+from futuris.predict.event_probability_forecaster import router as event_prob_router
+from futuris.predict.scenario_stress_tester import router as stress_test_router
+from futuris.predict.prediction_calibration_optimizer import router as calibration_router
 from futuris.api.routers.scenarios import fan_chart_router
 from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.api.routers.self_status import router as self_status_router
@@ -305,11 +313,47 @@ app.include_router(ecosystem_router)
 app.include_router(market_router, prefix="/v1/futuris")
 app.include_router(market_router, prefix="/api/v1/futuris", include_in_schema=False)
 app.include_router(market_router, prefix="/v1/market", include_in_schema=False)
+app.include_router(forecasting_engine_router, prefix="/api/v1/futuris")
+app.include_router(event_impact_router, prefix="/api/v1/futuris")
+app.include_router(ensemble_recon_router, prefix="/api/v1/futuris")
+app.include_router(predictive_maintenance_router, prefix="/api/v1/futuris")
+app.include_router(market_regime_router, prefix="/api/v1/futuris")
+app.include_router(event_prob_router, prefix="/api/v1/futuris")
+app.include_router(stress_test_router, prefix="/api/v1/futuris")
+app.include_router(calibration_router, prefix="/api/v1/futuris")
 app.include_router(predictions_router)
 app.include_router(self_status_router)
 app.include_router(streaming_router)
 app.include_router(webhooks_router, prefix="/v1")
 app.include_router(webhooks_router, prefix="/api/v1", include_in_schema=False)
+
+# --- Ensemble Model Selector Integration ---
+from predict.ensemble_model_selector import router as ensemble_selector_router
+app.include_router(ensemble_selector_router, prefix="/api/v1/futuris")
+
+# --- Forecast Explainability Engine Integration ---
+from predict.forecast_explainability_engine import router as explainability_router
+app.include_router(explainability_router, prefix="/api/v1/futuris")
+
+# --- Prediction Drift Detector Integration ---
+from predict.prediction_drift_detector import router as drift_detector_router
+app.include_router(drift_detector_router, prefix="/api/v1/futuris")
+
+# --- Skill Acquisition Planner Integration ---
+from futuris.services.skill_acquisition_planner import router as skill_planner_router
+app.include_router(skill_planner_router, prefix="/api/v1/futuris")
+
+# --- Counterfactual Forecaster Integration ---
+from futuris.services.counterfactual_forecaster import router as counterfactual_router
+app.include_router(counterfactual_router, prefix="/api/v1/futuris")
+
+# --- Quantum Forecast Engine Integration ---
+from futuris.services.quantum_forecast_engine import router as quantum_forecast_router
+app.include_router(quantum_forecast_router, prefix="/api/v1/futuris")
+
+# --- Prediction Market Engine Integration ---
+from futuris.services.prediction_market_engine import router as prediction_market_router
+app.include_router(prediction_market_router, prefix="/api/v1/futuris")
 
 
 @app.post("/v1/task/execute", tags=["Universal Task Protocol"])
