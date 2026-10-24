@@ -54,10 +54,10 @@ class CascadeNode:
     node_id: str
     event_id: str
     parent_node: str = ""
-    impacted_domain: str
-    impact_score: float
-    time_delay_hours: float
-    description: str
+    impacted_domain: str = ""
+    impact_score: float = 0.0
+    time_delay_hours: float = 0.0
+    description: str = ""
 
 
 @dataclass
