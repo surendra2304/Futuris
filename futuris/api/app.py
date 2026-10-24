@@ -347,6 +347,10 @@ app.include_router(skill_planner_router, prefix="/api/v1/futuris")
 from futuris.services.counterfactual_forecaster import router as counterfactual_router
 app.include_router(counterfactual_router, prefix="/api/v1/futuris")
 
+# --- Quantum Forecast Engine Integration ---
+from futuris.services.quantum_forecast_engine import router as quantum_forecast_router
+app.include_router(quantum_forecast_router, prefix="/api/v1/futuris")
+
 
 @app.post("/v1/task/execute", tags=["Universal Task Protocol"])
 @app.post("/api/v1/task/execute", tags=["Universal Task Protocol"], include_in_schema=False)
