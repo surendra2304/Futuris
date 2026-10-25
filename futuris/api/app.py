@@ -35,14 +35,24 @@ from futuris.api.routers.market import router as market_router
 from futuris.api.routers.models import router as models_router
 from futuris.api.routers.predictions import router as predictions_router
 from futuris.api.routers.risk import router as risk_router
-from futuris.predict.forecasting_engine import router as forecasting_engine_router
-from futuris.predict.realtime_event_impact import router as event_impact_router
-from futuris.predict.ensemble_reconciliation import router as ensemble_recon_router
-from futuris.predict.predictive_maintenance import router as predictive_maintenance_router
-from futuris.predict.market_regime_detector import router as market_regime_router
-from futuris.predict.event_probability_forecaster import router as event_prob_router
-from futuris.predict.scenario_stress_tester import router as stress_test_router
-from futuris.predict.prediction_calibration_optimizer import router as calibration_router
+try:
+    from futuris.predict.forecasting_engine import router as forecasting_engine_router
+    from futuris.predict.realtime_event_impact import router as event_impact_router
+    from futuris.predict.ensemble_reconciliation import router as ensemble_recon_router
+    from futuris.predict.predictive_maintenance import router as predictive_maintenance_router
+    from futuris.predict.market_regime_detector import router as market_regime_router
+    from futuris.predict.event_probability_forecaster import router as event_prob_router
+    from futuris.predict.scenario_stress_tester import router as stress_test_router
+    from futuris.predict.prediction_calibration_optimizer import router as calibration_router
+except ModuleNotFoundError:
+    from predict.forecasting_engine import router as forecasting_engine_router
+    from predict.realtime_event_impact import router as event_impact_router
+    from predict.ensemble_reconciliation import router as ensemble_recon_router
+    from predict.predictive_maintenance import router as predictive_maintenance_router
+    from predict.market_regime_detector import router as market_regime_router
+    from predict.event_probability_forecaster import router as event_prob_router
+    from predict.scenario_stress_tester import router as stress_test_router
+    from predict.prediction_calibration_optimizer import router as calibration_router
 from futuris.api.routers.scenarios import fan_chart_router
 from futuris.api.routers.scenarios import router as scenarios_router
 from futuris.api.routers.self_status import router as self_status_router

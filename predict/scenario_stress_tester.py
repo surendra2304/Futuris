@@ -145,7 +145,8 @@ class ScenarioStressTester:
         ]
 
         for name, impact, severity, prob in scenarios:
-            self.create_scenario(name, severity, float(prob), {"market_impact_pct": impact})
+            prob_val = float(prob.rstrip("%")) / 100.0 if isinstance(prob, str) and prob.endswith("%") else float(prob)
+            self.create_scenario(name, severity, prob_val, {"market_impact_pct": impact})
 
     def create_scenario(
         self,
