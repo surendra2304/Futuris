@@ -206,7 +206,7 @@ class PredictionCalibrationOptimizer:
 
         # Update method
         self._methods[f"platt_{model_name}"] = CalibrationMethod(
-            method_id=hashlib.md5(f"platt:{model_name}").hexdigest()[:12],
+            method_id=hashlib.md5(f"platt:{model_name}".encode()).hexdigest()[:12],
             name="platt",
             alpha=alpha,
             beta=beta,
@@ -238,7 +238,7 @@ class PredictionCalibrationOptimizer:
         self._temperature[model_name] = scaling
 
         self._methods[f"temp_{model_name}"] = CalibrationMethod(
-            method_id=hashlib.md5(f"temp:{model_name}").hexdigest()[:12],
+            method_id=hashlib.md5(f"temp:{model_name}".encode()).hexdigest()[:12],
             name="temperature",
             applied=True,
             improvement=self._metrics[model_name].expected_calibration_error * 0.4,
@@ -279,7 +279,7 @@ class PredictionCalibrationOptimizer:
         self._isotonic[model_name] = isotonic
 
         self._methods[f"iso_{model_name}"] = CalibrationMethod(
-            method_id=hashlib.md5(f"iso:{model_name}").hexdigest()[:12],
+            method_id=hashlib.md5(f"iso:{model_name}".encode()).hexdigest()[:12],
             name="isotonic",
             applied=True,
             improvement=self._metrics[model_name].expected_calibration_error * 0.6,
