@@ -150,7 +150,7 @@ class ForecastingEngine:
         for i in range(horizon_periods):
             # Exponential trend with some noise
             value = base_value * (1 + adjusted_trend) ** (i + 1)
-            value += (ord(hashlib.md5(f"{series_id}:{i}:{horizon}".encode()).encode()) % 100) / 100 - 0.5
+            value += (ord(hashlib.md5(f"{series_id}:{i}:{horizon}".encode()).hexdigest()[:1]) % 100) / 100 - 0.5
 
             predictions.append(value)
 
@@ -192,7 +192,7 @@ class ForecastingEngine:
         base = series.values[-1] if series.values else 100.0
 
         for model in models:
-            trend = 0.02 + (ord(hashlib.md5(f"{series_id}:{model}".encode()).encode()) % 50) / 1000
+            trend = 0.02 + (ord(hashlib.md5(f"{series_id}:{model}".encode()).hexdigest()[:1]) % 50) / 1000
             predictions = [base * (1 + trend) ** (i + 1) for i in range(horizon_periods)]
             predictions_by_model[model] = predictions
             all_predictions.append(predictions)
