@@ -334,6 +334,8 @@ app.include_router(calibration_router, prefix="/api/v1/futuris")
 app.include_router(predictions_router)
 app.include_router(self_status_router)
 app.include_router(streaming_router)
+from futuris.api.routers.real_engines import real_engines_router
+app.include_router(real_engines_router)
 app.include_router(webhooks_router, prefix="/v1")
 app.include_router(webhooks_router, prefix="/api/v1", include_in_schema=False)
 
