@@ -21,6 +21,8 @@ from futuris.infra.logging import get_logger
 
 logger = get_logger("futuris.storage.db")
 
+DATABASE_URL: str = settings.resolve_database_url()
+
 
 def sqlite_file_path(database_url: str) -> Path | None:
     """Return the on-disk path of a SQLite URL, or None for other dialects."""
@@ -43,7 +45,7 @@ def ensure_storage_directories(
     "unable to open database file" -- including the startup schema check. The
     application creates what it needs instead of requiring a manual mkdir.
     """
-    db_path = sqlite_file_path(database_url or settings.DATABASE_URL)
+    db_path = sqlite_file_path(database_url or DATABASE_URL)
     if db_path is not None and str(db_path.parent) not in {"", "."}:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         logger.debug("storage_directory_ready", path=str(db_path.parent))
@@ -57,7 +59,7 @@ engine_kwargs = {
     "echo": (settings.LOG_LEVEL.upper() == "DEBUG"),
     "future": True,
 }
-if "sqlite" in settings.DATABASE_URL:
+if "sqlite" in DATABASE_URL:
     # ``timeout`` is sqlite3's busy timeout: without it a concurrent writer gets
     # an immediate "database is locked" instead of waiting its turn. Measured
     # under an 8-way concurrent fuzz run, this was the difference between 503s
@@ -83,7 +85,7 @@ else:
     engine_kwargs["pool_recycle"] = 1800
     engine_kwargs["pool_pre_ping"] = True
 
-_effective_db_url = settings.DATABASE_URL
+_effective_db_url = DATABASE_URL
 if _effective_db_url.startswith("oracle+oracledb://"):
     _effective_db_url = "oracle+oracledb_async://" + _effective_db_url[len("oracle+oracledb://"):]
 
@@ -118,14 +120,14 @@ def install_sqlite_pragmas(target_engine: AsyncEngine) -> None:
             cursor.close()
 
 
-if "sqlite" in settings.DATABASE_URL:
+if "sqlite" in DATABASE_URL:
     install_sqlite_pragmas(engine)
 
 
 async def checkpoint_and_close_db() -> None:
     """Flush SQLite WAL checkpoints and dispose database handles cleanly."""
     try:
-        if "sqlite" in settings.DATABASE_URL:
+        if "sqlite" in DATABASE_URL:
             async with engine.begin() as conn:
                 await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE);"))
         await engine.dispose()
@@ -137,8 +139,8 @@ async def checkpoint_and_close_db() -> None:
 def sync_sqlite_checkpoint() -> None:
     """Best-effort synchronous SQLite WAL checkpoint on process exit."""
     try:
-        if "sqlite" in settings.DATABASE_URL:
-            db_path = sqlite_file_path(settings.DATABASE_URL)
+        if "sqlite" in DATABASE_URL:
+            db_path = sqlite_file_path(DATABASE_URL)
             if db_path is not None and db_path.exists():
                 conn = sqlite3.connect(str(db_path), timeout=5.0)
                 try:
@@ -258,12 +260,18 @@ async def add_missing_columns(target_engine: AsyncEngine | None = None) -> list[
     drift that Alembic migrations carry for PostgreSQL.  Without this a new
     column turns every read into ``no such column`` until an operator
     intervenes; with it the process heals itself on startup.
+
+    This is deliberately SQLite-only: the Oracle schema is created from
+    SQLAlchemy metadata and, once created, is owned by migrations.
     """
+
     from sqlalchemy.schema import CreateIndex
 
     from futuris.storage.models import Base
 
     active_engine = target_engine or engine
+    if not active_engine.dialect.name.startswith("sqlite"):
+        return []
     added: list[str] = []
     skipped: list[str] = []
     created_indexes: list[str] = []
@@ -320,10 +328,12 @@ async def add_missing_columns(target_engine: AsyncEngine | None = None) -> list[
 async def ensure_schema() -> dict[str, object]:
     """Create any missing tables and verify the result.
 
-    Only used for SQLite. On PostgreSQL (and any other dialect) Alembic owns the
-    schema, so this refuses to create tables and simply reports the measurement.
+    SQLite and Oracle are both bootstrapped from SQLAlchemy metadata; PostgreSQL
+    keeps Alembic as the schema owner and only reports the measurement.
     """
-    if not engine.dialect.name.startswith("sqlite"):
+
+    dialect = engine.dialect.name
+    if not (dialect.startswith("sqlite") or dialect == "oracle"):
         return await verify_schema()
 
     from futuris.storage.models import Base
@@ -333,7 +343,8 @@ async def ensure_schema() -> dict[str, object]:
             await conn.run_sync(Base.metadata.create_all)
     except Exception as exc:  # noqa: BLE001
         logger.warning("schema_create_failed", error=f"{type(exc).__name__}: {exc}")
-    await add_missing_columns()
+    if dialect.startswith("sqlite"):
+        await add_missing_columns()
     report = await verify_schema()
     if report["ready"]:
         logger.info("schema_verified", tables=report["present"])

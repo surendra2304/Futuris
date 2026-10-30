@@ -8,15 +8,50 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Identity,
     Index,
     Interval,
     String,
     Text,
+    TypeDecorator,
 )
+from sqlalchemy.dialects.oracle import TIMESTAMP as OracleTIMESTAMP
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
+
+
+class UTCDateTime(TypeDecorator):
+    """Timezone-aware UTC timestamp that survives Oracle.
+
+    Oracle maps ``DateTime(timezone=True)`` to plain ``DATE``, dropping both the
+    fractional seconds and the offset, so aware values come back naive and every
+    comparison against ``datetime.now(UTC)`` raises. On Oracle this uses
+    ``TIMESTAMP WITH TIME ZONE``; reads are normalised to UTC on every backend.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "oracle":
+            return dialect.type_descriptor(OracleTIMESTAMP(timezone=True))
+        return dialect.type_descriptor(DateTime(timezone=True))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
 
 @compiles(JSON, "oracle")
@@ -37,9 +72,9 @@ class ForecastModel(Base):
 
     forecast_id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     target: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    as_of: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, index=True)
     horizon: Mapped[datetime] = mapped_column(Interval, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     prediction: Mapped[float] = mapped_column(Float, nullable=False)
     range_lower: Mapped[float] = mapped_column(Float, nullable=False)
     range_upper: Mapped[float] = mapped_column(Float, nullable=False)
@@ -49,7 +84,7 @@ class ForecastModel(Base):
     assumptions: Mapped[list[str]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), default=list, nullable=False
     )
-    review_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    review_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     scenario_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("scenarios.scenario_id", ondelete="SET NULL", use_alter=True), nullable=True
@@ -123,7 +158,7 @@ class EvidenceRefModel(Base):
     source: Mapped[str] = mapped_column(String(255), nullable=False)
     source_trust: Mapped[str] = mapped_column(String(32), nullable=False)
     signal_class: Mapped[str] = mapped_column(String(64), nullable=False)
-    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     snapshot_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     evidence_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -147,7 +182,7 @@ class OutcomeModel(Base):
     )
     observed_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     event_occurred: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     resolution_method: Mapped[str] = mapped_column(String(64), nullable=False)
     ambiguity_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolution_rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -242,8 +277,8 @@ class SignalSourceModel(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     signal_class: Mapped[str] = mapped_column(String(64), nullable=False)
     trust_level: Mapped[str] = mapped_column(String(32), nullable=False)
-    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class ModelRegistryModel(Base):
@@ -255,7 +290,7 @@ class ModelRegistryModel(Base):
     family: Mapped[str] = mapped_column(String(255), nullable=False)
     config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
-    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    promoted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     benchmark_scores: Mapped[dict[str, float]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
     )
@@ -274,7 +309,7 @@ class EvaluationRunModel(Base):
     metrics: Mapped[dict[str, float]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     # See the note on ``ForecastEventModel.forecast``: this relationship pins
     # the flush order so ``model_registry`` is inserted before the runs that
     # reference it when both are pending in the same flush.
@@ -291,8 +326,8 @@ class ApiKeyModel(Base):
     key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class AuditLogModel(Base):
@@ -306,4 +341,4 @@ class AuditLogModel(Base):
     entity: Mapped[str] = mapped_column(String(128), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(255), nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, index=True)

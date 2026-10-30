@@ -21,7 +21,7 @@ FUTURIS is deployed on an Oracle Cloud Always Free host (Ampere A1 ARM64 / AMD x
 | **Docker Mesh URL** | `http://futuris:8000` | Private container mesh address within `friday_mesh` |
 | **Public Gateway Route** | `https://friday-universe.duckdns.org/futuris/*` | Reverse-proxy routed via Caddy |
 | **FRIDAY Core Gateway** | `http://friday:10000` | Primary ecosystem orchestrator |
-| **Database Engines** | PostgreSQL (`futuris_db`) / SQLite 3 WAL | `dokploy-postgres` & high-concurrency local WAL |
+| **Database Engines** | Oracle Autonomous Database (`FUTURIS` login/schema) | FRIDAY Universe DB; PostgreSQL and SQLite are not supported |
 | **Target Runtime** | Python 3.11+ / FastAPI | Non-root container (`appuser`, UID 1000) |
 
 ```
@@ -51,17 +51,13 @@ FUTURIS is deployed on an Oracle Cloud Always Free host (Ampere A1 ARM64 / AMD x
 
 ---
 
-## 💾 Production Database Storage (PostgreSQL & SQLite WAL)
+## 💾 Production Database Storage (Oracle Autonomous Database)
 
-FUTURIS supports production-grade dual persistence:
-1. **Production PostgreSQL (`dokploy-postgres`)**:
-   - Host: `dokploy-postgres:5432`, Database: `futuris_db`, User: `futuris_user`
-   - Connection: `asyncpg` async driver with pool recycling, keepalives, and pre-ping checks.
-   - 12 Provisioned Tables: `forecasts`, `evidence_refs`, `observations`, `outcomes`, `scenarios`, `forecast_events`, `model_registry`, `evaluation_runs`, `intelx_notices`, `signal_sources`, `api_keys`, `audit_logs`.
-2. **Local High-Concurrency SQLite 3 WAL Mode**:
-   - Storage Location: `data/futuris.db`
-   - WAL Mode: `PRAGMA journal_mode=WAL;` and `PRAGMA busy_timeout=30000;` to absorb concurrent bursts.
-   - Graceful Shutdown: `SIGTERM`/`SIGINT` trapping with `PRAGMA wal_checkpoint(TRUNCATE);`.
+FUTURIS uses the Oracle Autonomous Database only; PostgreSQL and SQLite are not supported backends.
+- **Login/schema:** `FUTURIS` on the FRIDAY Universe DB (`DATABASE_URL`).
+- **Connection:** `python-oracledb` through SQLAlchemy; credentials are read from the environment at runtime and are never committed.
+- **12 Provisioned Tables:** `forecasts`, `evidence_refs`, `observations`, `outcomes`, `scenarios`, `forecast_events`, `model_registry`, `evaluation_runs`, `intelx_notices`, `signal_sources`, `api_keys`, `audit_logs`.
+- **Graceful Shutdown:** `SIGTERM`/`SIGINT` trapping closes the pool cleanly.
 
 ### 🛡️ Core Safety Invariants
 - **Safety Invariant 1 (Strict Advisory Invariant)**: Forecasts are probabilistic advisory insights only (`prediction_is_not_authorization: true`). They strictly cannot execute trades, mutate servers, or release software autonomously (`executable_commands: []`).
@@ -400,7 +396,7 @@ All configuration parameters can be configured through environment variables or 
 | `APP_ENV` | String | `dev` | Environment mode (`dev`, `test`, `prod`). Requires production credential verification when `prod`. |
 | `PORT` | Integer | `8000` | Port for the HTTP/ASGI server to bind. |
 | `HOST` | String | `0.0.0.0` | Bind host address. |
-| `DATABASE_URL` | String | `sqlite+aiosqlite:///./data/futuris.db` | SQLAlchemy database URL. Defaults to SQLite WAL file storage. |
+| `DATABASE_URL` | String | Required in production | Oracle Autonomous Database DSN (`FUTURIS` login/schema). PostgreSQL and SQLite are not supported; startup fails closed when unset. |
 | `OBJECT_STORE_PATH` | String | `./data/storage` | Local directory path for telemetry snapshots and evidence artifacts. |
 | `LOG_LEVEL` | String | `INFO` | Python log level threshold (`DEBUG`, `INFO`, `WARNING`, `ERROR`). Structured format: `[%(asctime)s] [%(levelname)s] [futuris]: %(message)s`. |
 | `API_KEYS_ENABLED` | Boolean | `true` | Enforces API key verification on protected endpoints. |

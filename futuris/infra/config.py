@@ -47,28 +47,15 @@ class Settings(BaseSettings):
         ),
     )
     DATABASE_URL: str = Field(
-        default="sqlite+aiosqlite:///./data/futuris.db",
-        description="Async connection string for database (SQLite or PostgreSQL).",
-    )
-    POSTGRES_HOST: str = Field(
-        default="dokploy-postgres",
-        description="Dokploy PostgreSQL host",
-    )
-    POSTGRES_PORT: int = Field(
-        default=5432,
-        description="Dokploy PostgreSQL port",
-    )
-    POSTGRES_DB: str = Field(
-        default="futuris_db",
-        description="Dokploy PostgreSQL database name",
-    )
-    POSTGRES_USER: str = Field(
-        default="futuris_user",
-        description="Dokploy PostgreSQL username",
+        default="",
+        description=(
+            "Async connection string for the Oracle Autonomous Database. An empty value "
+            "fails closed at startup; there is no SQLite or PostgreSQL fallback."
+        ),
     )
     POSTGRES_PASSWORD: str | None = Field(
         default=None,
-        description="Dokploy PostgreSQL password",
+        description="Deprecated: retained only so older .env files load; Futuris uses Oracle.",
     )
     OBJECT_STORE_PATH: str = Field(
         default="./data/storage",
@@ -223,13 +210,55 @@ class Settings(BaseSettings):
     )
 
     @property
-    def postgres_async_url(self) -> str:
-        """Construct standard production PostgreSQL asyncpg connection URL."""
-        pw = self.POSTGRES_PASSWORD or "jK8qbCVzXpbP54t0yAvk-1KX"
-        return (
-            f"postgresql+asyncpg://{self.POSTGRES_USER}:{pw}"
-            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-        )
+    def database_backend(self) -> str:
+        """Dialect family of the configured database, for readiness receipts."""
+
+        url = (self.DATABASE_URL or "").strip()
+        if not url:
+            return "unconfigured"
+        scheme = url.split("://")[0]
+        if scheme.startswith("oracle"):
+            return "oracle"
+        if scheme.startswith("sqlite"):
+            return "sqlite"
+        if scheme.startswith("postgres"):
+            return "postgresql"
+        return scheme
+
+    def validate_database_backend(self) -> None:
+        """Fail closed unless a production deployment names Oracle.
+
+        Futuris used to default to SQLite and to fall back to a PostgreSQL URL
+        built from POSTGRES_* variables. Both are gone: production must name an
+        Oracle Autonomous Database explicitly. Development and the unit-test
+        suite keep a local SQLite file through ``resolve_database_url``.
+        """
+
+        from futuris.upgrade.safe_config import is_production_environment
+
+        if not is_production_environment(self.APP_ENV):
+            return
+        backend = self.database_backend
+        if backend != "oracle":
+            raise RuntimeError(
+                "DATABASE_URL must be an Oracle Autonomous Database URL in production; "
+                f"got {backend!r}"
+            )
+
+    def resolve_database_url(self) -> str:
+        """Return the configured URL, or a development-only SQLite file."""
+
+        from futuris.upgrade.safe_config import is_production_environment
+
+        url = (self.DATABASE_URL or "").strip()
+        if url:
+            return url
+        if is_production_environment(self.APP_ENV):
+            raise RuntimeError(
+                "DATABASE_URL is not configured. Set it to the Oracle Autonomous Database URL "
+                "(oracle+oracledb://...) before starting Futuris"
+            )
+        return "sqlite+aiosqlite:///./data/futuris-dev.db"
 
     def validate_production_safety(self) -> None:
         """Enforce safe_config checks if running under production environment."""
@@ -281,3 +310,5 @@ from futuris.upgrade.safe_config import is_production_environment  # noqa: E402
 if is_production_environment(settings.APP_ENV):
     settings.validate_production_safety()
     settings.validate_credential_contract()
+
+settings.validate_database_backend()
