@@ -1,14 +1,14 @@
-"""Async SQLAlchemy database engine, session factory, and FastAPI dependencies."""
+"""Async SQLAlchemy engine, session factory, and FastAPI dependencies.
+
+The only supported store is the Oracle Autonomous Database. There is no local
+file database and no PostgreSQL path: ``DATABASE_URL`` must name an
+``oracle+oracledb://`` DSN and configuration fails closed when it does not.
+"""
 
 import asyncio
-import atexit
-import sqlite3
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from sqlalchemy import event as sa_event
-from sqlalchemy import pool, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -24,66 +24,31 @@ logger = get_logger("futuris.storage.db")
 DATABASE_URL: str = settings.resolve_database_url()
 
 
-def sqlite_file_path(database_url: str) -> Path | None:
-    """Return the on-disk path of a SQLite URL, or None for other dialects."""
-    url = make_url(database_url)
-    if not url.get_backend_name().startswith("sqlite"):
-        return None
-    database = url.database
-    if not database or database == ":memory:":
-        return None
-    return Path(database)
-
-
-def ensure_storage_directories(
-    database_url: str | None = None, object_store_path: str | None = None
-) -> None:
+def ensure_storage_directories(object_store_path: str | None = None) -> None:
     """Create the directories the application needs before anything opens them.
 
-    ``data/`` is intentionally not committed, so a fresh checkout has no
-    directory for the default SQLite file and every connection fails with
-    "unable to open database file" -- including the startup schema check. The
-    application creates what it needs instead of requiring a manual mkdir.
+    Only the object/evidence store is a local directory now; the relational
+    store lives in Oracle and never touches the filesystem.
     """
-    db_path = sqlite_file_path(database_url or DATABASE_URL)
-    if db_path is not None and str(db_path.parent) not in {"", "."}:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        logger.debug("storage_directory_ready", path=str(db_path.parent))
     store = Path(object_store_path or settings.OBJECT_STORE_PATH)
     store.mkdir(parents=True, exist_ok=True)
 
 
 ensure_storage_directories()
 
-engine_kwargs = {
+engine_kwargs: dict[str, object] = {
     "echo": (settings.LOG_LEVEL.upper() == "DEBUG"),
     "future": True,
+    # Oracle: size the pool for a burst of concurrent forecast requests (each
+    # holds a session across its pipeline run), recycle stale connections and
+    # fail fast with a ping when a connection sat idle too long. Pool checkout
+    # timeouts are mapped to 503 by the API error layer.
+    "pool_size": 10,
+    "max_overflow": 20,
+    "pool_timeout": 15,
+    "pool_recycle": 1800,
+    "pool_pre_ping": True,
 }
-if "sqlite" in DATABASE_URL:
-    # ``timeout`` is sqlite3's busy timeout: without it a concurrent writer gets
-    # an immediate "database is locked" instead of waiting its turn. Measured
-    # under an 8-way concurrent fuzz run, this was the difference between 503s
-    # from the storage-error mapper and no storage errors at all.
-    engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30.0}
-    # SQLite connections are cheap file handles, and a request-scoped session
-    # holds its connection for the whole request -- including the multi-second
-    # pipeline computation. A fixed QueuePool (default size 5 + overflow 10)
-    # exhausts under a concurrent forecast storm and every excess request
-    # failed with ``QueuePool limit ... reached`` 500s (measured: 15 of 30
-    # concurrent FRIDAY delegations). NullPool gives every session its own
-    # connection and closes it on return, so the pool can never be the reason
-    # a request fails; SQLite's own WAL + busy-timeout serialises writers.
-    engine_kwargs["poolclass"] = pool.NullPool
-else:
-    # PostgreSQL: size the pool for a burst of concurrent forecast requests
-    # (each holds a session across its pipeline run), recycle stale
-    # connections, and fail fast with a ping when a connection was idle too
-    # long. Pool checkout timeouts are mapped to 503 by the API error layer.
-    engine_kwargs["pool_size"] = 10
-    engine_kwargs["max_overflow"] = 20
-    engine_kwargs["pool_timeout"] = 15
-    engine_kwargs["pool_recycle"] = 1800
-    engine_kwargs["pool_pre_ping"] = True
 
 _effective_db_url = DATABASE_URL
 if _effective_db_url.startswith("oracle+oracledb://"):
@@ -94,65 +59,14 @@ engine: AsyncEngine = create_async_engine(
     **engine_kwargs,
 )
 
-def install_sqlite_pragmas(target_engine: AsyncEngine) -> None:
-    """Install the WAL / busy-timeout / foreign-key PRAGMAs on a SQLite engine.
-
-    Exposed so tests can build a throwaway engine that behaves exactly like the
-    production one -- in particular ``PRAGMA foreign_keys=ON``, which is what
-    makes the flush-ordering contract in ``futuris/storage/models.py`` real
-    instead of decorative.
-    """
-
-    @sa_event.listens_for(target_engine.sync_engine, "connect")
-    def _sqlite_pragmas(dbapi_connection: object, _record: object) -> None:
-        """WAL + a generous busy timeout for the file-backed SQLite deployment.
-
-        WAL lets readers proceed while a writer commits, which is what the
-        dashboard, the scheduler and a forecast request do simultaneously.
-        """
-        cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
-        try:
-            cursor.execute("PRAGMA journal_mode=WAL;")
-            cursor.execute("PRAGMA synchronous=NORMAL;")
-            cursor.execute("PRAGMA busy_timeout=30000;")
-            cursor.execute("PRAGMA foreign_keys=ON;")
-        finally:
-            cursor.close()
-
-
-if "sqlite" in DATABASE_URL:
-    install_sqlite_pragmas(engine)
-
 
 async def checkpoint_and_close_db() -> None:
-    """Flush SQLite WAL checkpoints and dispose database handles cleanly."""
+    """Dispose database handles cleanly on shutdown."""
     try:
-        if "sqlite" in DATABASE_URL:
-            async with engine.begin() as conn:
-                await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE);"))
         await engine.dispose()
         logger.info("database_checkpoint_and_close_success")
     except Exception as exc:
         logger.warning("database_checkpoint_failed", error=str(exc))
-
-
-def sync_sqlite_checkpoint() -> None:
-    """Best-effort synchronous SQLite WAL checkpoint on process exit."""
-    try:
-        if "sqlite" in DATABASE_URL:
-            db_path = sqlite_file_path(DATABASE_URL)
-            if db_path is not None and db_path.exists():
-                conn = sqlite3.connect(str(db_path), timeout=5.0)
-                try:
-                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-                finally:
-                    conn.close()
-    except Exception:
-        pass
-
-
-atexit.register(sync_sqlite_checkpoint)
-
 
 
 async_session_factory = async_sessionmaker(
@@ -229,113 +143,13 @@ async def verify_schema() -> dict[str, object]:
     }
 
 
-def _sqlite_add_column_ddl(table_name: str, column: object, dialect: object) -> str | None:
-    """DDL for one missing column, or None when it cannot be added safely.
-
-    SQLite only accepts ``ADD COLUMN`` when the new column is nullable or has a
-    constant default, so anything else is reported instead of guessed at.
-    """
-    from sqlalchemy import Column
-
-    assert isinstance(column, Column)
-    type_sql = column.type.compile(dialect=dialect)
-    ddl = f'ALTER TABLE "{table_name}" ADD COLUMN "{column.name}" {type_sql}'
-    if column.server_default is not None:
-        ddl += f" DEFAULT {column.server_default.arg}"
-    elif not column.nullable:
-        default = column.default
-        argument = getattr(default, "arg", None)
-        if default is None or callable(argument):
-            return None
-        literal = f"'{argument}'" if isinstance(argument, str) else str(argument)
-        ddl += f" DEFAULT {literal}"
-    return ddl
-
-
-async def add_missing_columns(target_engine: AsyncEngine | None = None) -> list[str]:
-    """Add ORM columns a pre-existing SQLite database has not got yet.
-
-    ``create_all`` only ever creates whole tables, so a database written by an
-    earlier release keeps the old shape while the ORM moves on -- exactly the
-    drift that Alembic migrations carry for PostgreSQL.  Without this a new
-    column turns every read into ``no such column`` until an operator
-    intervenes; with it the process heals itself on startup.
-
-    This is deliberately SQLite-only: the Oracle schema is created from
-    SQLAlchemy metadata and, once created, is owned by migrations.
-    """
-
-    from sqlalchemy.schema import CreateIndex
-
-    from futuris.storage.models import Base
-
-    active_engine = target_engine or engine
-    if not active_engine.dialect.name.startswith("sqlite"):
-        return []
-    added: list[str] = []
-    skipped: list[str] = []
-    created_indexes: list[str] = []
-    try:
-        async with active_engine.begin() as conn:
-            for table in Base.metadata.sorted_tables:
-                rows = (
-                    await conn.exec_driver_sql(f"PRAGMA table_info('{table.name}')")
-                ).fetchall()
-                if not rows:
-                    continue  # table missing entirely: create_all owns that
-                present = {row[1] for row in rows}
-                for column in table.columns:
-                    if column.name in present:
-                        continue
-                    ddl = _sqlite_add_column_ddl(table.name, column, active_engine.dialect)
-                    if ddl is None:
-                        skipped.append(f"{table.name}.{column.name}")
-                        continue
-                    await conn.exec_driver_sql(ddl)
-                    added.append(f"{table.name}.{column.name}")
-                if not table.indexes:
-                    continue
-                present_indexes = {
-                    row[1]
-                    for row in (
-                        await conn.exec_driver_sql(f"PRAGMA index_list('{table.name}')")
-                    ).fetchall()
-                }
-                for index in table.indexes:
-                    if index.name in present_indexes:
-                        continue
-                    try:
-                        await conn.exec_driver_sql(
-                            str(CreateIndex(index).compile(dialect=active_engine.dialect))
-                        )
-                        created_indexes.append(index.name)
-                    except Exception as exc:  # noqa: BLE001 - per-index best effort
-                        logger.warning(
-                            "schema_index_repair_failed", index=index.name, error=str(exc)[:200]
-                        )
-    except Exception as exc:  # noqa: BLE001 - repair must never block startup
-        logger.warning("schema_column_repair_failed", error=f"{type(exc).__name__}: {exc}")
-        return added
-    if added:
-        logger.warning("schema_columns_added", columns=added)
-    if created_indexes:
-        logger.warning("schema_indexes_added", indexes=created_indexes)
-    if skipped:
-        logger.error("schema_columns_not_addable", columns=skipped)
-    return added
-
-
 async def ensure_schema() -> dict[str, object]:
-    """Create any missing tables and verify the result.
+    """Create any missing tables in the Oracle schema and verify the result.
 
-    SQLite and Oracle are both bootstrapped from SQLAlchemy metadata; PostgreSQL
-    keeps Alembic as the schema owner and only reports the measurement.
+    Oracle is bootstrapped from SQLAlchemy metadata because a freshly
+    provisioned FUTURIS schema starts empty. ``create_all`` is idempotent and
+    only creates tables that are absent.
     """
-
-    dialect = engine.dialect.name
-    if not (dialect.startswith("sqlite") or dialect == "oracle"):
-        return await verify_schema()
-
     from futuris.storage.models import Base
 
     try:
@@ -343,8 +157,6 @@ async def ensure_schema() -> dict[str, object]:
             await conn.run_sync(Base.metadata.create_all)
     except Exception as exc:  # noqa: BLE001
         logger.warning("schema_create_failed", error=f"{type(exc).__name__}: {exc}")
-    if dialect.startswith("sqlite"):
-        await add_missing_columns()
     report = await verify_schema()
     if report["ready"]:
         logger.info("schema_verified", tables=report["present"])
@@ -357,15 +169,13 @@ _repair_task: asyncio.Task | None = None
 
 
 def schedule_schema_repair() -> None:
-    """Queue one bounded schema repair for the running loop (SQLite only).
+    """Queue one bounded schema repair for the running loop.
 
     Called when a request discovers the schema is missing -- for example an ASGI
     host that skipped the lifespan hook. At most one repair runs at a time, so a
     burst of failing requests cannot stampede ``create_all``.
     """
     global _repair_task
-    if not engine.dialect.name.startswith("sqlite"):
-        return
     if _repair_task is not None and not _repair_task.done():
         return
     try:

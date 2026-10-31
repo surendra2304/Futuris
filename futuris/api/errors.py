@@ -9,8 +9,8 @@ here, because both are cross-cutting:
   is not JSON serializable`` 500. Validation details are now sanitised before
   they are rendered.
 * A database that was never initialised surfaced as a 500 carrying a raw
-  ``sqlite3.OperationalError``. Storage problems are now mapped to 503 with a
-  machine-readable code and a remediation hint, and a missing schema on SQLite
+  driver exception. Storage problems are now mapped to 503 with a
+  machine-readable code and a remediation hint, and a missing Oracle schema
   triggers a one-shot, bounded repair so the next request can succeed.
 """
 
@@ -91,10 +91,16 @@ def storage_error_response(exc: OperationalError) -> JSONResponse:
     """Map a database OperationalError onto an actionable 503."""
     message = str(getattr(exc, "orig", exc))
     lowered = message.lower()
-    if "no such table" in lowered or "no such column" in lowered or "does not exist" in lowered:
-        # "no such column" is the stale-database shape of the same problem: an
-        # existing SQLite file whose table predates a column the ORM now reads.
-        # The scheduled repair adds those columns (see db.add_missing_columns).
+    if (
+        "no such table" in lowered
+        or "no such column" in lowered
+        or "does not exist" in lowered
+        or "ora-00942" in lowered
+        or "ora-00904" in lowered
+    ):
+        # ORA-00942/ORA-00904 are the Oracle shapes of a stale or missing schema:
+        # the object the ORM selects is not there yet. The scheduled repair runs
+        # ``create_all`` again (see db.ensure_schema).
         code = "storage_schema_missing"
         public = (
             "The database is reachable but its schema is not initialised. Run the "
@@ -102,14 +108,25 @@ def storage_error_response(exc: OperationalError) -> JSONResponse:
             "`alembic upgrade head`, then retry."
         )
         repair = True
-    elif "unable to open database file" in lowered or "connection refused" in lowered:
+    elif (
+        "unable to open database file" in lowered
+        or "connection refused" in lowered
+        or "ora-12541" in lowered
+        or "ora-12514" in lowered
+        or "dpy-6005" in lowered
+    ):
         code = "storage_unavailable"
         public = (
             "The configured database could not be opened. Check DATABASE_URL and "
-            "that the directory exists and is writable."
+            "network access to the Oracle Autonomous Database."
         )
         repair = False
-    elif "database is locked" in lowered or "database table is locked" in lowered:
+    elif (
+        "database is locked" in lowered
+        or "database table is locked" in lowered
+        or "ora-00054" in lowered
+        or "ora-00060" in lowered
+    ):
         code = "storage_busy"
         public = "The database is locked by another writer. Retry shortly."
         repair = False
@@ -120,11 +137,9 @@ def storage_error_response(exc: OperationalError) -> JSONResponse:
 
     logger.error("storage_error_mapped", code=code, error=message[:400])
     if repair:
-        # Best-effort, non-blocking repair for development SQLite deployments:
-        # an ASGI host that skipped the lifespan hook (or a DB file created by a
-        # plain import) leaves an empty schema, and the next request should not
-        # pay for it. Non-SQLite dialects keep Alembic as the single owner of
-        # their schema.
+        # Best-effort, non-blocking repair for a schema that was never created:
+        # an ASGI host that skipped the lifespan hook leaves an empty Oracle
+        # schema, and the next request should not pay for it.
         try:
             from futuris.storage.db import schedule_schema_repair
 

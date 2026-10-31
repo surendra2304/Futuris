@@ -106,11 +106,9 @@ class SelfHealingSupervisor:
         try:
             async with engine.connect() as conn:
                 result = await conn.execute(
-                    text("SELECT name FROM sqlite_master WHERE type='table'")
-                    if engine.dialect.name == "sqlite"
-                    else text("SELECT tablename FROM pg_tables WHERE schemaname='public'")
+                    text("SELECT table_name FROM user_tables")
                 )
-                present = {row[0] for row in result}
+                present = {row[0].lower() for row in result}
         except Exception as exc:
             return SubsystemCheck(
                 name="schema",

@@ -1,4 +1,4 @@
-"""SQLAlchemy 2.0 ORM database models mapping to domain schemas with JSONB support."""
+"""SQLAlchemy 2.0 ORM database models mapping to the Oracle Autonomous Database schema."""
 
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -16,7 +16,6 @@ from sqlalchemy import (
     TypeDecorator,
 )
 from sqlalchemy.dialects.oracle import TIMESTAMP as OracleTIMESTAMP
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -82,7 +81,7 @@ class ForecastModel(Base):
     confidence: Mapped[str] = mapped_column(String(32), nullable=False)
     model_version: Mapped[str] = mapped_column(String(255), nullable=False)
     assumptions: Mapped[list[str]] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=list, nullable=False
+        JSON(), default=list, nullable=False
     )
     review_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -97,25 +96,25 @@ class ForecastModel(Base):
     )
 
     drivers: Mapped[list[dict]] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=list, nullable=False
+        JSON(), default=list, nullable=False
     )
     predictive_distribution: Mapped[dict] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+        JSON(), default=dict, nullable=False
     )
     intervals: Mapped[list[dict]] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=list, nullable=False
+        JSON(), default=list, nullable=False
     )
     calibration_metrics: Mapped[dict] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+        JSON(), default=dict, nullable=False
     )
     model_metadata: Mapped[dict] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+        JSON(), default=dict, nullable=False
     )
     # Unique via ix_forecasts_idempotency_key below (not merely indexed): the
     # FRIDAY delegation path is idempotent on this key, and the unique index is
     # what makes a concurrent retry storm produce exactly one forecast instead
-    # of N duplicates. Both SQLite and Postgres allow any number of NULLs
-    # under a unique index.
+    # of N duplicates. Oracle allows any number of NULLs under a unique
+    # constraint, so the idempotency key stays nullable for non-delegated rows.
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Provenance labels.  They were domain-only fields for a long time, so a
     # forecast built from live Stratex telemetry read back as ``synthetic``
@@ -197,7 +196,7 @@ class ScenarioModel(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     scenario_type: Mapped[str] = mapped_column(String(64), nullable=False)
     assumptions_override: Mapped[dict] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+        JSON(), default=dict, nullable=False
     )
     created_by: Mapped[str] = mapped_column(String(255), nullable=False)
     parent_forecast_id: Mapped[UUID | None] = mapped_column(
@@ -216,7 +215,7 @@ class ForecastEventModel(Base):
     )
     event_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     payload: Mapped[dict] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+        JSON(), default=dict, nullable=False
     )
     emitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
@@ -241,7 +240,7 @@ class IntelXNoticeModel(Base):
     event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     source_agent: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+        JSON(), default=dict, nullable=False
     )
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False, index=True
@@ -262,7 +261,7 @@ class ObservationModel(Base):
     value: Mapped[float] = mapped_column(Float, nullable=False)
     unit: Mapped[str] = mapped_column(String(64), nullable=False)
     tags: Mapped[dict] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+        JSON(), default=dict, nullable=False
     )
 
     __table_args__ = (Index("ix_observations_series_time", "series_id", "observed_at"),)
@@ -292,7 +291,7 @@ class ModelRegistryModel(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     promoted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     benchmark_scores: Mapped[dict[str, float]] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+        JSON(), default=dict, nullable=False
     )
 
 
@@ -307,7 +306,7 @@ class EvaluationRunModel(Base):
     )
     dataset_name: Mapped[str] = mapped_column(String(255), nullable=False)
     metrics: Mapped[dict[str, float]] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+        JSON(), default=dict, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     # See the note on ``ForecastEventModel.forecast``: this relationship pins

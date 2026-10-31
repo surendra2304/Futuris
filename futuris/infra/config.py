@@ -49,13 +49,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field(
         default="",
         description=(
-            "Async connection string for the Oracle Autonomous Database. An empty value "
-            "fails closed at startup; there is no SQLite or PostgreSQL fallback."
+            "Async connection string for the Oracle Autonomous Database "
+            "(oracle+oracledb://user:password@host/service_name). An empty value fails "
+            "closed at startup; there is no local-file or PostgreSQL fallback."
         ),
-    )
-    POSTGRES_PASSWORD: str | None = Field(
-        default=None,
-        description="Deprecated: retained only so older .env files load; Futuris uses Oracle.",
     )
     OBJECT_STORE_PATH: str = Field(
         default="./data/storage",
@@ -219,46 +216,45 @@ class Settings(BaseSettings):
         scheme = url.split("://")[0]
         if scheme.startswith("oracle"):
             return "oracle"
-        if scheme.startswith("sqlite"):
-            return "sqlite"
-        if scheme.startswith("postgres"):
-            return "postgresql"
         return scheme
 
     def validate_database_backend(self) -> None:
-        """Fail closed unless a production deployment names Oracle.
+        """Fail closed unless the configured database is Oracle.
 
-        Futuris used to default to SQLite and to fall back to a PostgreSQL URL
-        built from POSTGRES_* variables. Both are gone: production must name an
-        Oracle Autonomous Database explicitly. Development and the unit-test
-        suite keep a local SQLite file through ``resolve_database_url``.
+        Futuris used to default to a local SQLite file and to fall back to a
+        PostgreSQL URL built from ``POSTGRES_*`` variables. Both are gone: the
+        only supported store is the Oracle Autonomous Database, named explicitly
+        by ``DATABASE_URL``.
         """
 
-        from futuris.upgrade.safe_config import is_production_environment
-
-        if not is_production_environment(self.APP_ENV):
-            return
         backend = self.database_backend
+        if backend == "unconfigured":
+            raise RuntimeError(
+                "DATABASE_URL is not configured. Set it to the Oracle Autonomous Database "
+                "URL (oracle+oracledb://user:password@host/service_name) before starting "
+                "Futuris; there is no local-file or PostgreSQL fallback."
+            )
         if backend != "oracle":
             raise RuntimeError(
-                "DATABASE_URL must be an Oracle Autonomous Database URL in production; "
-                f"got {backend!r}"
+                "DATABASE_URL must be an Oracle Autonomous Database URL; "
+                f"got {backend!r}. Futuris supports Oracle only."
             )
 
     def resolve_database_url(self) -> str:
-        """Return the configured URL, or a development-only SQLite file."""
-
-        from futuris.upgrade.safe_config import is_production_environment
+        """Return the validated Oracle URL, failing closed when it is absent."""
 
         url = (self.DATABASE_URL or "").strip()
-        if url:
-            return url
-        if is_production_environment(self.APP_ENV):
+        if not url:
             raise RuntimeError(
                 "DATABASE_URL is not configured. Set it to the Oracle Autonomous Database URL "
                 "(oracle+oracledb://...) before starting Futuris"
             )
-        return "sqlite+aiosqlite:///./data/futuris-dev.db"
+        if not url.startswith("oracle"):
+            raise RuntimeError(
+                "DATABASE_URL must be an Oracle Autonomous Database URL; "
+                f"got scheme {url.split('://')[0]!r}. Futuris supports Oracle only."
+            )
+        return url
 
     def validate_production_safety(self) -> None:
         """Enforce safe_config checks if running under production environment."""
