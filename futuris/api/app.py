@@ -402,6 +402,37 @@ async def execute_task(body: dict):
                 "system commands, or website changes. It only provides calibrated forecasts."
             ),
         )
+    if action_lower in ("status", "health", "ping", "report", "supervision_status"):
+        health = await health_check()
+        storage = health.get("storage") or {}
+        task_id = str(body.get("task_id") or f"futuris_status_{int(time.time())}")
+        return {
+            "task_id": task_id,
+            "target_agent": "futuris",
+            "status": "SUCCESS" if health.get("status") == "ok" else "DEGRADED",
+            "result": health,
+            "summary": (
+                f"Futuris online, storage {'ready' if storage.get('ready') else 'not ready'} "
+                f"(version {health.get('version')})."
+            ),
+            "execution_time_ms": 0,
+            "receipt": {
+                "requested_action": action,
+                "target": "futuris",
+                "authorization_decision": "AUTHORIZED",
+                "execution_timestamp": datetime.now(UTC).isoformat(),
+                "result": {"version": health.get("version"), "storage_ready": storage.get("ready")},
+                "verification_evidence": {
+                    "source": "futuris.v1.task.execute",
+                    "task_id": task_id,
+                    "evidence_class": health.get("evidence_class"),
+                    "storage": storage,
+                    "observed_at": health.get("observed_at"),
+                },
+                "failure_reason": None,
+            },
+        }
+
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=(
