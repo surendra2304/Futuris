@@ -6,6 +6,8 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+import os
+
 class Settings(BaseSettings):
     """Central configuration for FUTURIS services and infrastructure."""
 
@@ -206,10 +208,20 @@ class Settings(BaseSettings):
         description="Allowed CORS origin domains.",
     )
 
+    def _friday_standalone_test_database_url(self) -> str:
+        enabled = os.getenv("FRIDAY_STANDALONE_TEST_MODE", "").strip().lower() in {"1", "true", "yes"}
+        app_env = (os.getenv("APP_ENV") or self.APP_ENV or "").strip().lower()
+        path = os.getenv("FUTURIS_TEST_DB_PATH", "").strip()
+        if enabled and app_env in {"test", "testing"} and path.startswith("/tmp/"):
+            return f"sqlite+aiosqlite:///{path}"
+        return ""
+
     @property
     def database_backend(self) -> str:
         """Dialect family of the configured database, for readiness receipts."""
 
+        if self._friday_standalone_test_database_url():
+            return "sqlite-test"
         url = (self.DATABASE_URL or "").strip()
         if not url:
             return "unconfigured"
@@ -227,6 +239,8 @@ class Settings(BaseSettings):
         by ``DATABASE_URL``.
         """
 
+        if self._friday_standalone_test_database_url():
+            return
         backend = self.database_backend
         if backend == "unconfigured":
             raise RuntimeError(
@@ -242,6 +256,10 @@ class Settings(BaseSettings):
 
     def resolve_database_url(self) -> str:
         """Return the validated Oracle URL, failing closed when it is absent."""
+
+        test_url = self._friday_standalone_test_database_url()
+        if test_url:
+            return test_url
 
         url = (self.DATABASE_URL or "").strip()
         if not url:
