@@ -13,6 +13,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY Futuris/requirements.txt Futuris/pyproject.toml Futuris/README.md ./
 COPY Futuris/futuris ./futuris
+COPY Futuris/predict ./predict
 COPY mesh ./mesh
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
@@ -42,6 +43,7 @@ RUN mkdir -p /app/data /app/data/storage && \
     chown -R appuser:appuser /app
 
 COPY --from=builder /build/futuris /app/futuris
+COPY --from=builder /build/predict /app/predict
 COPY --from=builder /build/mesh /app/mesh
 RUN chown -R appuser:appuser /app
 
