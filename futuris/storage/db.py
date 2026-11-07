@@ -54,6 +54,9 @@ _effective_db_url = DATABASE_URL
 if _effective_db_url.startswith("oracle+oracledb://"):
     _effective_db_url = "oracle+oracledb_async://" + _effective_db_url[len("oracle+oracledb://"):]
 
+if _effective_db_url.startswith("sqlite"):
+    engine_kwargs = {"echo": (settings.LOG_LEVEL.upper() == "DEBUG"), "future": True}
+
 engine: AsyncEngine = create_async_engine(
     _effective_db_url,
     **engine_kwargs,
